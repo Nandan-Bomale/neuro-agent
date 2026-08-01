@@ -1,0 +1,56 @@
+﻿PROJECT PROPOSAL
+NeuroAgent
+A Multi-Agent AI System for Brain MRI Diagnosis Support
+Submitted by: Nandan  |  Guided by Prof.Prashant N  |  Date: July 2026
+
+
+1. Introduction
+Every year, radiologists examine thousands of brain MRI scans to look for tumours and other abnormalities. This is careful, time-consuming work. The radiologist doesn't just look at the scan — they also think about the patient's age, symptoms, and medical history, check what similar cases have shown in medical research, and then write up a report and decide what should happen next.
+Most AI projects in this space automate only one small part of this process: looking at the scan and predicting a label, such as “tumour” or “no tumour.” This project goes further. Instead of one large model trying to do everything, it builds a small team of AI agents that work together, the way a real clinical team would — one agent looks at the scan, one checks the patient's history, one searches medical literature, one writes the report, and one double-checks the result before it reaches a doctor.
+2. Problem Statement
+Existing AI tools for MRI analysis are almost always single-purpose classifiers. They take an image and return a label and a confidence score. They cannot explain their reasoning in a way a doctor can act on, cannot check their finding against current medical literature, cannot factor in the patient's history, and cannot flag when they themselves are unsure. This makes them useful as a filter, but not trustworthy enough to genuinely assist in a clinical decision.
+This project aims to design and build an agentic AI system — NeuroAgent — that detects abnormalities in brain MRI scans, reasons over the patient's clinical context, retrieves and cites supporting medical literature, generates a structured radiology report, and checks its own confidence before presenting a result. The system is built to support a radiologist's decision-making, not replace it.
+3. Objectives
+• Build a vision model that detects and segments abnormal regions (tumours) in brain MRI scans.
+• Design a multi-agent system where separate agents handle vision, clinical reasoning, literature retrieval, report writing, and verification.
+• Use Retrieval-Augmented Generation (RAG) so the system's explanations are grounded in real medical literature, not guesses.
+• Fine-tune a small open-source language model to write structured, doctor-style radiology reports.
+• Add an explainability layer (Grad-CAM) so the system shows which part of the scan led to its conclusion.
+• Add a verification step that flags low-confidence cases for mandatory human review, instead of presenting every output as certain.
+• Keep the entire system buildable and demoable on standard, freely available hardware and tools.
+4. Proposed System — Overview
+NeuroAgent is built as a pipeline of specialised agents, coordinated by an orchestrator, rather than one large model trying to do everything. Each agent has one clear job, which makes the system easier to build, easier to test, and easier to explain — you can point to exactly which component produced which part of the final answer. The design deliberately favours a smaller number of agents built well over a larger number of agents built shallowly, so the finished system is reliable and demoable end-to-end, not a collection of half-working parts.
+5. System Architecture
+The diagram below shows how a scan moves through the system: from raw input, through the orchestrator, out to the specialist agents, and finally into a single combined report.
+
+5.1 Agent Descriptions
+• Vision Agent — uses a segmentation model (U-Net / MONAI) to find and outline abnormal regions in the scan, along with a confidence score.
+• Clinical History Agent — takes structured patient data (age, symptoms, history) and reasons about how well it fits the vision agent's finding.
+• RAG Literature Agent — searches a vector database of medical papers and guidelines to pull evidence relevant to the detected condition.
+• Report Generation Agent — a fine-tuned language model that combines all of the above into a structured radiology report, citing its sources.
+• Verification Agent — checks the confidence of the finding and flags the case for mandatory human review if it is below a safe threshold.
+• Explainability Agent — produces a Grad-CAM heatmap so a doctor can see exactly which region of the scan drove the conclusion.
+• Orchestrator — built with LangGraph, this decides the order agents run in and routes data between them, including looping back if verification fails.
+6. Technology Stack and Justification
+Every tool below was chosen because it is free, open-source, well-documented, and realistic to run on modest hardware — nothing in this stack needs paid infrastructure to build or demo.
+LayerTool(s)Why this toolVision modelPyTorch, MONAI, U-NetMONAI is purpose-built for medical imaging and has ready pipelines for MRI data, saving weeks of setup.Data augmentationClassical augmentation (rotation, flip, elastic deformation) as the base; GAN-based augmentation as an enhancementClassical augmentation is reliable and fast to implement; a GAN is added on top for realism if time and compute allow (see Section 8).Language modelLlama-3.2-3B or Phi-3-mini + LoRA (4-bit)Small enough to fine-tune with limited GPU memory, yet strong enough to write coherent reports.Retrieval (RAG)FAISS / Chroma + PubMedBERT embeddingsFree vector databases; PubMedBERT embeddings understand medical terminology better than general-purpose ones.OrchestrationLangGraphDesigned for stateful, multi-step agent workflows with conditional branching (e.g. re-checking a low-confidence case).BackendFastAPILightweight, fast to build REST endpoints for each agent and the overall pipeline.FrontendStreamlitGets a working, presentable demo interface running in days rather than weeks.DeploymentDockerMakes the whole system reproducible on any machine for the demo and evaluation.7. Datasets
+DatasetUsed forBraTS (Brain Tumour Segmentation)Primary dataset for training the vision agent's tumour detection and segmentation.PubMed abstracts (via NCBI E-utilities)Builds the literature corpus that the RAG agent searches for evidence.Synthetic clinical profilesReasonable, made-up patient metadata (age, symptoms) paired with BraTS scans, since public imaging datasets rarely include this.All datasets listed above are free and publicly available, with no approval delays — important for keeping the project on schedule.
+8. Build Priority and Timeline
+The plan below is risk-ranked: the agents most essential to a working demo are built first, so there is always something complete to show, even if later steps run behind schedule. Where a component has a real risk of not converging in time (GAN training in particular), a simpler, reliable fallback is decided in advance rather than discovered under deadline pressure.
+8.1 Build order
+• Vision Agent — core, built and tested first.
+• RAG Literature Agent — core, mechanically simple, built early to de-risk the pipeline.
+• Report Generation Agent — core, depends on Vision + RAG outputs being ready.
+• Orchestrator connecting the three agents above — core. At this point the system is already a complete, demoable project.
+• Verification Agent and Explainability Agent — added once the core pipeline runs end-to-end; both are lightweight to implement and high-impact for the demo.
+• GAN-based augmentation — attempted as an enhancement on top of the working classical-augmentation baseline. If it has not converged well by the checkpoint in Week 5, the project proceeds with the classical baseline and the GAN attempt is documented honestly as an experiment in the final report.
+8.2 Timeline
+WeeksPhaseDeliverable1 – 3Vision agentWorking tumour segmentation model with Grad-CAM overlay, tested on BraTS.4 – 5AugmentationClassical augmentation pipeline working (baseline secured); GAN attempted in parallel with a Week 5 go/no-go checkpoint.6 – 7RAG pipelineVector database built from PubMed abstracts; literature agent returns relevant, cited results.8 – 9Report agentLoRA fine-tuned language model producing structured, evidence-cited reports.10 – 11OrchestrationAll agents connected via LangGraph, including the verification loop for low-confidence cases.12Testing, polish, demo prepEnd-to-end testing, Streamlit interface, final report, and rehearsed demo.9. Expected Outcomes and Deliverables
+• A working end-to-end system: upload an MRI scan and patient details, and receive a structured, evidence-cited report with a confidence flag.
+• A trained and evaluated vision model with segmentation accuracy reported on a held-out test set (e.g., Dice score on BraTS).
+• A fine-tuned report-generation model, with example outputs compared against real radiology report style.
+• A working RAG pipeline that returns real, cited medical literature for a given finding.
+• A short demo video and a live walkthrough for the evaluation/defence.
+• A written project report documenting the architecture, design decisions, and evaluation results.
+10. Conclusion
+NeuroAgent is designed to move beyond a single-purpose MRI classifier and demonstrate the kind of AI system that is actually being built in industry today: multiple agents working together, grounded in real evidence, transparent about their own confidence, and built to support human experts rather than replace them. The scope is kept deliberately lean and achievable on standard hardware, with a clear, honest plan for what is core, what is an enhancement, and what would benefit from additional compute — so the finished project is complete and dependable, not partially built.
