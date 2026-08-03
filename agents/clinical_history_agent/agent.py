@@ -447,7 +447,7 @@ def _extract_fields_from_block(block: str, result: Dict[str, Any]) -> None:
 
     # CONFIDENCE
     confidence_match = re.search(
-        r"CONFIDENCE\s*:\s*([0-9]*\.?[0-9]+)",
+        r"CONFIDENCE\s*:\s*(-?[0-9]*\.?[0-9]+)",
         block,
         re.IGNORECASE,
     )
