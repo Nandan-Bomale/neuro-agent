@@ -24,6 +24,18 @@ State management (st.session_state):
 
 from __future__ import annotations
 
+# ── sys.path fix (MUST be before all project imports) ─────────────────────────
+# Streamlit adds the *script's directory* (frontend/) to sys.path, which means
+# `from frontend.X import Y` fails because Python looks for frontend/frontend/X.
+# We insert the project root so all `from frontend.X` and `from backend.X`
+# imports resolve correctly regardless of launch directory.
+import sys
+from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 import json
 import logging
 import os
@@ -51,6 +63,7 @@ st.set_page_config(
 )
 
 # ── Import frontend modules (after set_page_config) ───────────────────────────
+# sys.path now includes project root, so `from frontend.X` resolves correctly.
 from frontend.styles import inject_css  # noqa: E402
 from frontend.components.upload_panel import render_upload_panel  # noqa: E402
 from frontend.components.report_viewer import render_results  # noqa: E402
