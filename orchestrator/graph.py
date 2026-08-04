@@ -7,27 +7,33 @@ Graph topology:
 
   ┌─────────────────────────────────────────────────────────────────────┐
   │                          START                                      │
-  │                    ┌──────┼──────┐                                  │
-  │                    ▼      ▼      ▼                                  │
-  │               vision  clinical  rag    ← parallel fan-out           │
-  │                    └──────┼──────┘                                  │
-  │                           ▼                                         │
-  │                        report          ← fan-in (waits for all 3)   │
-  │                           ▼                                         │
-  │                     verification                                     │
-  │                    ┌──────┴──────┐                                  │
-  │                    ▼             ▼                                  │
-  │             explainability   human_review    ← conditional edge     │
-  │                    ▼             ▼                                  │
-  │                   END           END                                  │
+  │                            │                                        │
+  │                            ▼                                        │
+  │                         vision          ← tumour detection first    │
+  │                            │                                        │
+  │                            ▼                                        │
+  │                         clinical        ← needs vision output       │
+  │                            │                                        │
+  │                            ▼                                        │
+  │                           rag           ← literature retrieval      │
+  │                            │                                        │
+  │                            ▼                                        │
+  │                         report          ← combines all three        │
+  │                            │                                        │
+  │                       verification                                   │
+  │                    ┌───────┴───────┐                                │
+  │                    ▼               ▼                                │
+  │             explainability    human_review   ← conditional edge     │
+  │                    ▼               ▼                                │
+  │                   END             END                               │
   └─────────────────────────────────────────────────────────────────────┘
 
-Parallel execution note:
-  vision, clinical, and rag are independent agents — they all receive the
-  same initial state and write to different fields. LangGraph runs them in
-  parallel when using .ainvoke() (async). With .invoke() (sync), they run
-  in the topological order determined by the graph but still fan-in to
-  report only after all three complete.
+Execution order rationale:
+  vision runs first — its confidence score and detected regions are required
+  by both clinical (to assess history consistency) and rag (to query the right
+  literature). clinical runs before rag so its risk-factor analysis can also
+  inform the literature query. report combines all three, then verification
+  gates the final output.
 
 Usage:
     from orchestrator.graph import compile_graph, run_pipeline
@@ -105,17 +111,12 @@ def build_graph() -> StateGraph:
     builder.add_node(_NODE_EXPLAINABILITY, explainability_node)
     builder.add_node(_NODE_HUMAN_REVIEW, human_review_node)
 
-    # ── Edges: parallel fan-out from START ─────────────────────────────────────
-    # vision, clinical, and rag are independent — all three start simultaneously.
+    # ── Edges: strictly sequential pipeline ───────────────────────────────────
+    # vision runs first — clinical needs its output to assess history fit,
+    # rag needs its detected label to query the right literature.
     builder.add_edge(START, _NODE_VISION)
-    builder.add_edge(START, _NODE_CLINICAL)
-    builder.add_edge(START, _NODE_RAG)
-
-    # ── Edges: fan-in to report ────────────────────────────────────────────────
-    # report_node only executes after ALL THREE parallel nodes have completed.
-    # LangGraph implicitly synchronises here — report waits for vision + clinical + rag.
-    builder.add_edge(_NODE_VISION, _NODE_REPORT)
-    builder.add_edge(_NODE_CLINICAL, _NODE_REPORT)
+    builder.add_edge(_NODE_VISION, _NODE_CLINICAL)
+    builder.add_edge(_NODE_CLINICAL, _NODE_RAG)
     builder.add_edge(_NODE_RAG, _NODE_REPORT)
 
     # ── Edges: sequential pipeline after report ────────────────────────────────
@@ -149,10 +150,10 @@ def compile_graph():
     Example:
         graph = compile_graph()
 
-        # Synchronous (sequential execution even for parallel nodes)
+        # Synchronous — standard usage
         result = graph.invoke(initial_state)
 
-        # Asynchronous (true parallel execution for vision/clinical/rag)
+        # Asynchronous — same sequential order, non-blocking I/O
         import asyncio
         result = asyncio.run(graph.ainvoke(initial_state))
     """
