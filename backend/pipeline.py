@@ -6,22 +6,26 @@ LangGraph multi-agent pipeline.
 
 Design
 ------
-The class has two operating modes, selected automatically at startup:
+The class has two operating modes controlled by the ``MOCK_MODE`` env var:
 
-  REAL mode  (``PIPELINE_MODE=real`` in .env, agents are importable)
-    Calls orchestrator.graph.run_pipeline() with the MRI scan path and patient
-    data dict.  Returns a fully populated NeuroAgentState dict.
+  REAL mode  (``MOCK_MODE=false`` — DEFAULT)
+    Imports and calls orchestrator.graph.compile_graph().invoke() with the
+    MRI scan path and patient data dict.  Maps the final NeuroAgentState dict
+    to an AnalysisResponse using _state_to_response().
+    If the LangGraph import fails at runtime, falls back to MOCK automatically.
 
-  MOCK mode  (``PIPELINE_MODE=mock``, or any import error in real mode)
+  MOCK mode  (``MOCK_MODE=true``)
     Returns a deterministic, realistic fake response so the entire
-    backend + frontend can be developed and tested before the agents are ready.
+    backend + frontend can be developed and tested without GPU / model weights.
     The mock generates a synthetic Grad-CAM heatmap image (real numpy math,
-    not a placeholder) so the UI heatmap display is exercised properly.
+    not a placeholder) so the UI heatmap component is exercised properly.
 
-Swap strategy
--------------
-When the Orchestrator chat finishes, set PIPELINE_MODE=real in .env.
-Nothing else in the backend changes — this file is the only integration point.
+env vars
+--------
+  MOCK_MODE                    true | false   (default: false → real pipeline)
+  LOW_CONFIDENCE_THRESHOLD     float          (default: 0.60)
+  HIGH_CONFIDENCE_THRESHOLD    float          (default: 0.80)
+  MAX_UPLOAD_MB                float          (default: 500)
 
 Usage (internal — called by routes/analyze.py)
 ----------------------------------------------
@@ -61,11 +65,11 @@ logger = logging.getLogger(__name__)
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 
-#: Set PIPELINE_MODE=real in .env to enable the live LangGraph pipeline.
-#: Any other value (or unset) → mock mode.
-_PIPELINE_MODE: str = os.getenv("PIPELINE_MODE", "mock").lower()
+#: MOCK_MODE=true → synthetic responses, no GPU required.
+#: MOCK_MODE=false (default) → real LangGraph pipeline.
+_MOCK_MODE: bool = os.getenv("MOCK_MODE", "false").lower() in ("1", "true", "yes")
 
-#: Confidence below this → LOW label. Above HIGH_THRESHOLD → HIGH.
+#: Confidence below LOW_THRESHOLD → LOW label. Above HIGH_THRESHOLD → HIGH.
 _LOW_THRESHOLD: float = float(os.getenv("LOW_CONFIDENCE_THRESHOLD", "0.60"))
 _HIGH_THRESHOLD: float = float(os.getenv("HIGH_CONFIDENCE_THRESHOLD", "0.80"))
 
@@ -311,11 +315,23 @@ def _state_to_response(
     scan_path: str,
 ) -> AnalysisResponse:
     """
-    Map a final NeuroAgentState dict (from run_pipeline()) to AnalysisResponse.
+    Map a final NeuroAgentState dict (from the LangGraph pipeline) to AnalysisResponse.
 
-    Called only in REAL mode.  Handles missing/None fields gracefully so a
-    partially-complete pipeline (during incremental agent development) still
-    returns a usable response.
+    Called only in REAL mode.  All field lookups are defensive so a partially-
+    complete pipeline (incremental agent development) still returns a usable
+    response rather than crashing.
+
+    Field-name normalisation
+    ------------------------
+    orchestrator/state.py documents ``vision_findings`` keys as:
+      - ``confidence``       float  (primary confidence score)
+      - ``prediction_label`` str    ("tumour_detected" | "no_tumour")
+      - ``model_version``    str
+
+    The VisionSummary schema uses ``confidence_score`` (float) and
+    ``tumour_detected`` (bool), so this function translates between the two.
+    Both old and new key names are tried for forward/backward compatibility
+    as agents are incrementally integrated.
 
     Args:
         state:     Final NeuroAgentState dict from the LangGraph pipeline.
@@ -327,20 +343,41 @@ def _state_to_response(
         Fully populated AnalysisResponse.
     """
     vision_findings: dict = state.get("vision_findings") or {}
-    report_dict: dict = state.get("report") or {}
-    lit_results: list = state.get("literature_results") or []
+    report_dict: dict     = state.get("report") or {}
+    lit_results: list     = state.get("literature_results") or []
+
+    # ── Vision: confidence score ──────────────────────────────────────────────
+    # state.py documents the key as "confidence"; VisionSummary uses "confidence_score".
+    # Try both so the mapper works regardless of which key the agent writes.
+    vision_confidence = float(
+        vision_findings.get("confidence_score")
+        or vision_findings.get("confidence")
+        or 0.0
+    )
+
+    # ── Vision: tumour detected bool ──────────────────────────────────────────
+    # state.py documents the key as "prediction_label" (str).
+    # Try explicit bool key first; derive from label string as fallback.
+    if "tumour_detected" in vision_findings:
+        tumour_detected = bool(vision_findings["tumour_detected"])
+    else:
+        pred_label = vision_findings.get("prediction_label", "").lower()
+        tumour_detected = pred_label in ("tumour_detected", "tumor_detected",
+                                         "positive", "abnormal", "1", "true")
 
     # ── Vision summary ────────────────────────────────────────────────────────
     vision_summary = VisionSummary(
-        tumour_detected=vision_findings.get("tumour_detected", False),
-        confidence_score=float(vision_findings.get("confidence_score", 0.0)),
+        tumour_detected=tumour_detected,
+        confidence_score=vision_confidence,
         tumour_volume_voxels=int(vision_findings.get("tumour_volume_voxels", 0)),
         tumour_volume_cc=float(vision_findings.get("tumour_volume_cc", 0.0)),
         gradcam_slice=int(vision_findings.get("gradcam_slice", -1)),
-        model_version=vision_findings.get("model_version", "unet-monai-v1"),
+        model_version=str(vision_findings.get("model_version", "unet-monai-v1")),
     )
 
     # ── Citations ─────────────────────────────────────────────────────────────
+    # Map RAG output list → Citation objects.
+    # "abstract" is the full text key; "relevance_snippet" is a pre-extracted field.
     citations = [
         Citation(
             title=lit.get("title", ""),
@@ -349,7 +386,10 @@ def _state_to_response(
             year=lit.get("year"),
             pmid=lit.get("pmid"),
             relevance_score=float(lit.get("relevance_score", 0.0)),
-            relevance_snippet=lit.get("abstract", "")[:300],
+            relevance_snippet=(
+                lit.get("relevance_snippet")
+                or lit.get("abstract", "")[:300]
+            ),
             citation=lit.get("citation", ""),
         )
         for lit in lit_results
@@ -362,30 +402,39 @@ def _state_to_response(
         recommendations=report_dict.get("recommendations", ""),
         reasoning=report_dict.get("reasoning", ""),
         cited_literature=citations,
-        generated_at=report_dict.get("generated_at", datetime.now(timezone.utc).isoformat()),
+        generated_at=report_dict.get(
+            "generated_at", datetime.now(timezone.utc).isoformat()
+        ),
     )
 
-    # ── Confidence ────────────────────────────────────────────────────────────
+    # ── Overall confidence ────────────────────────────────────────────────────
+    # state["overall_confidence"] is set by the Report Agent combining vision +
+    # clinical scores.  Falls back to raw vision confidence if not yet available.
     confidence = float(
         state.get("overall_confidence")
         or vision_findings.get("confidence_score")
+        or vision_findings.get("confidence")
         or 0.0
     )
 
     # ── Heatmap PNG → base64 ──────────────────────────────────────────────────
+    # The Explainability Agent saves a PNG and writes its path to
+    # state["gradcam_heatmap_path"].  If the path is missing or the file
+    # was cleaned up, fall back to a synthetic heatmap so the UI never errors.
     heatmap_b64: str = ""
     gradcam_path = state.get("gradcam_heatmap_path", "")
     if gradcam_path and Path(gradcam_path).exists():
         raw_bytes = Path(gradcam_path).read_bytes()
         heatmap_b64 = base64.b64encode(raw_bytes).decode("utf-8")
+        logger.debug("Loaded heatmap from %s (%d bytes)", gradcam_path, len(raw_bytes))
     else:
-        # Fallback: generate a synthetic heatmap so the frontend never gets an empty image
         logger.warning(
-            "gradcam_heatmap_path missing or not found (%s). Using synthetic fallback.",
+            "gradcam_heatmap_path missing or not found (%r). Using synthetic fallback.",
             gradcam_path,
         )
         heatmap_b64 = _generate_mock_heatmap()
 
+    # ── Pipeline status ───────────────────────────────────────────────────────
     pipeline_status = state.get("pipeline_status", "complete")
     if pipeline_status not in ("complete", "human_review_required", "error"):
         pipeline_status = "complete"
@@ -405,7 +454,7 @@ def _state_to_response(
         metadata={
             "mode": "real",
             "vision_model": vision_findings.get("model_version", "unet-monai-v1"),
-            "llm_model": "phi-3-mini-4bit",
+            "llm_model": os.getenv("LLM_MODEL_NAME", "phi-3-mini-4bit"),
             "rag_backend": "faiss",
             "scan_path": str(scan_path),
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -420,22 +469,29 @@ class OrchestratorPipeline:
     """
     Pipeline manager loaded once at app startup via the FastAPI lifespan.
 
-    In REAL mode: lazy-compiles the LangGraph graph on first call.
-    In MOCK mode: runs entirely in-process with no agent imports needed.
+    Mode is controlled by the ``MOCK_MODE`` environment variable:
+      - MOCK_MODE=false (default) → imports and runs the real LangGraph pipeline.
+      - MOCK_MODE=true            → returns deterministic synthetic responses.
+
+    If the real pipeline import fails at runtime (missing model weights,
+    missing dependencies) the class automatically falls back to MOCK so the
+    API stays up and returns a meaningful error-free response.
 
     Public API (called by routes/analyze.py):
         result = await pipeline.run(scan_path, patient_data_dict)
     """
 
     def __init__(self) -> None:
-        self._mode = _PIPELINE_MODE
-        self._graph = None   # lazy-loaded in real mode
-        logger.info("[Pipeline] OrchestratorPipeline initialised | mode=%s", self._mode)
+        self._mock: bool = _MOCK_MODE   # True → mock, False → real
+        self._graph = None              # lazy-compiled on first real run
+        logger.info(
+            "[Pipeline] OrchestratorPipeline initialised | mock_mode=%s", self._mock
+        )
 
     # ── Lazy graph loader ─────────────────────────────────────────────────────
 
     def _ensure_graph_loaded(self) -> None:
-        """Import and compile the LangGraph graph (real mode only)."""
+        """Import and compile the LangGraph graph (real mode only, called once)."""
         if self._graph is not None:
             return
         try:
@@ -446,7 +502,7 @@ class OrchestratorPipeline:
             logger.error(
                 "[Pipeline] Failed to compile LangGraph graph: %s — falling back to mock.", exc
             )
-            self._mode = "mock"
+            self._mock = True   # automatic graceful degradation
 
     # ── Public async run ──────────────────────────────────────────────────────
 
@@ -476,19 +532,24 @@ class OrchestratorPipeline:
         _run_id = run_id or str(uuid.uuid4())
         t_start = time.time()
 
-        if self._mode == "real":
+        # ── Mode selection ─────────────────────────────────────────────────────
+        # Compile the graph lazily on first real call.
+        # If _ensure_graph_loaded() fails it sets self._mock = True automatically.
+        if not self._mock:
             self._ensure_graph_loaded()
 
-        if self._mode == "mock":
+        # ── MOCK mode ─────────────────────────────────────────────────────────
+        if self._mock:
             logger.info("[Pipeline] MOCK run | run_id=%s", _run_id)
-            # Simulate realistic processing delay (0.5 – 1.5 s in mock)
-            await asyncio.sleep(0.8)
+            await asyncio.sleep(0.8)   # simulate realistic processing delay
             elapsed = time.time() - t_start
             return _build_mock_response(patient_data, scan_path, _run_id, elapsed)
 
-        # ── Real mode ─────────────────────────────────────────────────────────
+        # ── REAL mode — call the LangGraph orchestrator ────────────────────────
         logger.info("[Pipeline] REAL run | run_id=%s | scan=%s", _run_id, scan_path)
 
+        # Offload the synchronous graph.invoke() to a thread pool executor
+        # so it doesn't block the FastAPI async event loop.
         loop = asyncio.get_event_loop()
         from orchestrator.state import create_initial_state  # noqa: PLC0415
 
@@ -498,7 +559,6 @@ class OrchestratorPipeline:
             run_id=_run_id,
         )
 
-        # Run the blocking LangGraph call in a thread pool
         state: dict = await loop.run_in_executor(
             None, self._graph.invoke, initial_state
         )
@@ -511,4 +571,7 @@ class OrchestratorPipeline:
         return _state_to_response(state, _run_id, elapsed, scan_path)
 
     def __repr__(self) -> str:
-        return f"OrchestratorPipeline(mode={self._mode!r}, graph_loaded={self._graph is not None})"
+        return (
+            f"OrchestratorPipeline(mock_mode={self._mock}, "
+            f"graph_loaded={self._graph is not None})"
+        )

@@ -13,12 +13,12 @@ Server startup
 
 Environment variables (set in .env or system environment)
 ---------------------------------------------------------
-    PIPELINE_MODE          mock | real         (default: mock)
-    MAX_UPLOAD_MB          float               (default: 500)
-    LOW_CONFIDENCE_THRESHOLD  float            (default: 0.60)
-    HIGH_CONFIDENCE_THRESHOLD float            (default: 0.80)
-    ALLOWED_ORIGINS        comma-separated URLs (default: *)
-    LOG_LEVEL              DEBUG|INFO|WARNING   (default: INFO)
+    MOCK_MODE                 true | false        (default: false → real pipeline)
+    MAX_UPLOAD_MB             float               (default: 500)
+    LOW_CONFIDENCE_THRESHOLD  float               (default: 0.60)
+    HIGH_CONFIDENCE_THRESHOLD float               (default: 0.80)
+    ALLOWED_ORIGINS           comma-separated URLs (default: *)
+    LOG_LEVEL                 DEBUG|INFO|WARNING   (default: INFO)
 
 Registered routes
 -----------------
@@ -85,7 +85,7 @@ async def lifespan(app: FastAPI):
     """
     logger.info("=" * 60)
     logger.info("NeuroAgent Backend starting up")
-    logger.info("  Pipeline mode : %s", os.getenv("PIPELINE_MODE", "mock"))
+    logger.info("  Mock mode     : %s", os.getenv("MOCK_MODE", "false"))
     logger.info("  Log level     : %s", _LOG_LEVEL)
     logger.info("  CORS origins  : %s", _ALLOWED_ORIGINS)
     logger.info("=" * 60)
@@ -111,7 +111,8 @@ app = FastAPI(
         "**Pipeline agents**: Vision · Clinical History · RAG Literature · "
         "Report Generation · Verification · Explainability\n\n"
         "**Orchestration**: LangGraph\n\n"
-        "**Mode**: Set `PIPELINE_MODE=real` in `.env` to enable the live pipeline."
+        "**Mode**: Set `MOCK_MODE=false` (default) in `.env` for the live pipeline. "
+        "Set `MOCK_MODE=true` for UI testing without GPU."
     ),
     version="0.1.0",
     contact={
@@ -178,7 +179,8 @@ async def health_check():
         "status": "ok",
         "service": "neuroagent-backend",
         "version": app.version,
-        "pipeline_mode": os.getenv("PIPELINE_MODE", "mock"),
+        "mock_mode": os.getenv("MOCK_MODE", "false").lower() in ("1", "true", "yes"),
+        "pipeline_mode": "mock" if os.getenv("MOCK_MODE", "false").lower() in ("1", "true", "yes") else "real",
     }
 
 
