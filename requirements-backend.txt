@@ -1,0 +1,48 @@
+# ── requirements-backend.txt ──────────────────────────────────────────────────
+# Installed inside docker/Dockerfile.backend ONLY.
+# Includes the full ML/agent stack so the real LangGraph pipeline runs.
+# For UI-only / mock testing you can trim the ML sections below.
+
+# ── Core ML & Vision ──────────────────────────────────────────────────────────
+torch>=2.1.0
+torchvision>=0.16.0
+monai>=1.3.0
+nibabel>=5.1.0
+opencv-python-headless>=4.8.0   # headless: no display needed in container
+Pillow>=10.0.0
+scikit-image>=0.21.0
+matplotlib>=3.7.0
+numpy>=1.24.0
+scipy>=1.11.0
+
+# ── LLM & NLP ─────────────────────────────────────────────────────────────────
+transformers>=4.40.0
+peft>=0.10.0
+bitsandbytes>=0.43.0
+accelerate>=0.29.0
+datasets>=2.19.0
+tokenizers>=0.19.0
+sentence-transformers>=2.7.0
+
+# ── RAG / Vector Store ────────────────────────────────────────────────────────
+faiss-cpu>=1.8.0
+chromadb>=0.4.24
+langchain>=0.1.20
+langchain-community>=0.0.38
+
+# ── Orchestration ─────────────────────────────────────────────────────────────
+langgraph>=0.0.55
+
+# ── Backend API ───────────────────────────────────────────────────────────────
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+pydantic>=2.7.0
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0
+tqdm>=4.66.0
+loguru>=0.7.2
+requests>=2.31.0
+httpx>=0.27.0
+PyYAML>=6.0.1

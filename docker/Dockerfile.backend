@@ -1,0 +1,74 @@
+# =============================================================================
+# docker/Dockerfile.backend
+# =============================================================================
+# NeuroAgent FastAPI backend image.
+#
+# Build:
+#   docker build -f docker/Dockerfile.backend -t neuroagent-backend:latest .
+#
+# Run (standalone, without compose):
+#   docker run --rm -p 8000:8000 \
+#     --env-file .env \
+#     -v $(pwd)/data:/app/data \
+#     -v $(pwd)/models:/app/models \
+#     neuroagent-backend:latest
+#
+# Notes:
+#   - data/ and models/ are mounted as volumes at runtime, NOT copied into the
+#     image, because they contain large binary files (NIfTI scans, weights).
+#   - opencv-python-headless is used (no display server needed in container).
+#   - For CUDA support swap the base image for pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime
+#     and install faiss-gpu instead of faiss-cpu.
+# =============================================================================
+
+FROM python:3.11-slim
+
+# ── System dependencies ───────────────────────────────────────────────────────
+# libgomp1   : required by faiss / MONAI / OpenCV
+# libglib2.0 : required by OpenCV headless
+# ffmpeg     : required by some torch audio/video ops
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgomp1 \
+        libglib2.0-0 \
+        libgl1-mesa-glx \
+        ffmpeg \
+        git \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Working directory ─────────────────────────────────────────────────────────
+WORKDIR /app
+
+# ── Python dependencies ───────────────────────────────────────────────────────
+# Copy requirements first so Docker layer-caches the pip install step.
+# If requirements-backend.txt hasn't changed, this layer is reused on rebuild.
+COPY requirements-backend.txt ./
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements-backend.txt
+
+# ── Application source ────────────────────────────────────────────────────────
+# Copy project source (data/ and models/ are excluded via .dockerignore
+# and mounted as volumes at runtime).
+COPY backend/     ./backend/
+COPY orchestrator/ ./orchestrator/
+COPY agents/      ./agents/
+
+# ── Runtime configuration ─────────────────────────────────────────────────────
+# Expose the backend API port.
+EXPOSE 8000
+
+# Default env: real pipeline. Override with MOCK_MODE=true for UI-only testing.
+ENV MOCK_MODE=false \
+    LOG_LEVEL=INFO \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# ── Health check ──────────────────────────────────────────────────────────────
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+CMD ["uvicorn", "backend.main:app", \
+     "--host", "0.0.0.0", \
+     "--port", "8000", \
+     "--workers", "1", \
+     "--log-level", "info"]
