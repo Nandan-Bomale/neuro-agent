@@ -1,0 +1,320 @@
+"""
+backend/schemas.py
+------------------
+Pydantic v2 request and response models for the NeuroAgent FastAPI backend.
+
+All field names and types are derived from the real NeuroAgentState TypedDict
+(orchestrator/state.py) and VisionAgentResult dataclass (agents/vision_agent/agent.py)
+so that pipeline.py can map the LangGraph output to these models without
+transformation gymnastics.
+
+Models
+------
+  Request  : PatientData
+  Response : Citation, StructuredReport, AnalysisResponse
+
+Usage
+-----
+    from backend.schemas import PatientData, AnalysisResponse
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Annotated, Any, Literal, Optional
+
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+# ── Request models ─────────────────────────────────────────────────────────────
+
+
+class PatientData(BaseModel):
+    """
+    Structured patient metadata submitted alongside the MRI scan.
+
+    Mirrors the ``patient_data`` dict expected by create_initial_state()
+    in orchestrator/state.py.  All fields the Clinical History Agent reads
+    from the state are present here.
+
+    Example JSON body (form field ``patient_json``):
+    {
+        "age": 45,
+        "sex": "M",
+        "symptoms": ["persistent headache", "blurred vision"],
+        "medical_history": ["hypertension", "no prior malignancy"],
+        "medications": ["amlodipine 5mg"],
+        "referring_notes": "GP concerned about 3-week headache, unresolving.",
+        "scan_modality": "FLAIR"
+    }
+    """
+
+    age: Annotated[int, Field(ge=0, le=130, description="Patient age in years")]
+    sex: Literal["M", "F", "Other"] = Field(description="Biological sex")
+    symptoms: list[str] = Field(
+        default_factory=list,
+        description="List of reported symptoms",
+        examples=[["headache", "nausea"]],
+    )
+    medical_history: list[str] = Field(
+        default_factory=list,
+        description="Relevant past medical conditions",
+    )
+    medications: list[str] = Field(
+        default_factory=list,
+        description="Current medications",
+    )
+    referring_notes: str = Field(
+        default="",
+        description="Free-text notes from the referring clinician",
+    )
+    scan_modality: str = Field(
+        default="FLAIR",
+        description="Primary MRI modality of the uploaded scan (T1, T2, FLAIR, etc.)",
+    )
+
+    @field_validator("age")
+    @classmethod
+    def age_must_be_positive(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("Age must be ≥ 0")
+        return v
+
+    def to_pipeline_dict(self) -> dict[str, Any]:
+        """
+        Serialise to the flat dict format expected by create_initial_state().
+        Keeps the field names identical to what the Clinical History Agent reads
+        from state[``patient_data``].
+        """
+        return {
+            "age": self.age,
+            "sex": self.sex,
+            "symptoms": self.symptoms,
+            "medical_history": self.medical_history,
+            "medications": self.medications,
+            "referring_notes": self.referring_notes,
+            "scan_modality": self.scan_modality,
+        }
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "age": 45,
+                "sex": "M",
+                "symptoms": ["persistent headache", "blurred vision"],
+                "medical_history": ["hypertension"],
+                "medications": ["amlodipine 5mg"],
+                "referring_notes": "3-week headache, unresponsive to analgesia.",
+                "scan_modality": "FLAIR",
+            }
+        }
+    }
+
+
+# ── Response sub-models ────────────────────────────────────────────────────────
+
+
+class Citation(BaseModel):
+    """
+    A single literature citation returned by the RAG Literature Agent.
+
+    Maps to one item in state[``literature_results``] as written by
+    RAGLiteratureAgent.run().
+    """
+
+    title: str = Field(description="Full paper title")
+    authors: list[str] = Field(
+        default_factory=list,
+        description="Author list (Last, First format preferred)",
+    )
+    journal: str = Field(default="", description="Journal or conference name")
+    year: Optional[int] = Field(default=None, description="Publication year")
+    pubmed_id: Optional[str] = Field(
+        default=None,
+        alias="pmid",
+        description="PubMed ID (PMID) for direct linking",
+    )
+    relevance_score: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Semantic relevance score from the RAG retrieval step",
+    )
+    relevance_snippet: str = Field(
+        default="",
+        description="Key excerpt from the abstract explaining relevance",
+    )
+    citation_string: str = Field(
+        default="",
+        alias="citation",
+        description="Pre-formatted citation string (APA or Vancouver style)",
+    )
+
+    model_config = {"populate_by_name": True}
+
+
+class VisionSummary(BaseModel):
+    """
+    Key findings from the Vision Agent, extracted from state[``vision_findings``].
+    Shown separately in the UI confidence panel.
+    """
+
+    tumour_detected: bool
+    confidence_score: float = Field(ge=0.0, le=1.0)
+    tumour_volume_voxels: int = Field(default=0)
+    tumour_volume_cc: float = Field(default=0.0, description="Approx volume in cm³")
+    gradcam_slice: int = Field(default=-1, description="Axial slice used for Grad-CAM")
+    model_version: str = Field(default="unet-monai-v1")
+
+
+class StructuredReport(BaseModel):
+    """
+    Full structured radiology report generated by the Report Generation Agent.
+
+    Maps to state[``report``] as written by ReportGenerationAgent.run().
+    The field names here match the keys documented in orchestrator/state.py.
+    """
+
+    findings: str = Field(
+        description="Detailed description of detected abnormalities and their location"
+    )
+    impression: str = Field(
+        description="Radiologist-style summary and clinical conclusion"
+    )
+    recommendations: str = Field(
+        description="Suggested next clinical steps (biopsy, follow-up MRI, etc.)"
+    )
+    reasoning: str = Field(
+        default="",
+        description="Step-by-step agent reasoning chain (for transparency)",
+    )
+    cited_literature: list[Citation] = Field(
+        default_factory=list,
+        description="Literature citations used in the report",
+    )
+    generated_at: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat(),
+        description="ISO 8601 UTC timestamp of report generation",
+    )
+
+
+class AnalysisResponse(BaseModel):
+    """
+    Full response returned by POST /analyze.
+
+    Aggregates outputs from all pipeline agents into a single JSON object
+    that the Streamlit frontend consumes directly.
+
+    Key design decisions:
+    - ``heatmap_b64`` is a base64-encoded PNG string so the frontend can render
+      it without a separate file-serving endpoint.
+    - ``confidence`` and ``confidence_label`` come from state[``overall_confidence``]
+      produced by the Report Agent (falls back to vision confidence).
+    - All numpy arrays from the Vision Agent are excluded — only scalar results
+      and the pre-rendered overlay PNG are returned.
+    """
+
+    # ── Unique run identifier ─────────────────────────────────────────────────
+    run_id: str = Field(description="UUID4 run identifier for tracing/audit")
+
+    # ── Core results ──────────────────────────────────────────────────────────
+    report: StructuredReport
+    vision_summary: VisionSummary
+
+    # ── Heatmap ───────────────────────────────────────────────────────────────
+    heatmap_b64: str = Field(
+        description=(
+            "Base64-encoded PNG of the Grad-CAM overlay image. "
+            "Decode with: PIL.Image.open(io.BytesIO(base64.b64decode(heatmap_b64)))"
+        )
+    )
+
+    # ── Confidence ────────────────────────────────────────────────────────────
+    confidence: Annotated[float, Field(ge=0.0, le=1.0)] = Field(
+        description="Overall pipeline confidence score (0–1)"
+    )
+    confidence_label: Literal["HIGH", "MEDIUM", "LOW"] = Field(
+        description="Human-readable confidence tier"
+    )
+    requires_review: bool = Field(
+        description="True → case must be reviewed by a human radiologist before acting"
+    )
+    verification_notes: str = Field(
+        default="",
+        description="Verification Agent's explanation of its decision",
+    )
+
+    # ── Explainability ────────────────────────────────────────────────────────
+    explanation_summary: str = Field(
+        default="",
+        description="Plain-language explanation of which scan regions drove the prediction",
+    )
+
+    # ── Pipeline metadata ─────────────────────────────────────────────────────
+    pipeline_status: Literal["complete", "human_review_required", "error"] = Field(
+        description="Final pipeline lifecycle status"
+    )
+    processing_time_s: float = Field(
+        description="Wall-clock time for the full pipeline run (seconds)"
+    )
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Additional audit metadata: model versions, timestamps, etc.",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def clamp_confidence(cls, values: dict) -> dict:
+        """Ensure confidence is always in [0, 1] regardless of source."""
+        if "confidence" in values:
+            values["confidence"] = max(0.0, min(1.0, float(values["confidence"])))
+        return values
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "run_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                "report": {
+                    "findings": "A 3.2 cm hyperintense lesion is identified in the right temporal lobe...",
+                    "impression": "Findings are consistent with a high-grade glioma.",
+                    "recommendations": "Urgent neurosurgical consultation and contrast-enhanced MRI advised.",
+                    "reasoning": "Vision Agent detected a high-confidence tumour mass...",
+                    "cited_literature": [],
+                    "generated_at": "2026-08-03T08:00:00+00:00",
+                },
+                "vision_summary": {
+                    "tumour_detected": True,
+                    "confidence_score": 0.91,
+                    "tumour_volume_voxels": 3200,
+                    "tumour_volume_cc": 3.2,
+                    "gradcam_slice": 78,
+                    "model_version": "unet-monai-v1",
+                },
+                "heatmap_b64": "<base64-encoded PNG>",
+                "confidence": 0.91,
+                "confidence_label": "HIGH",
+                "requires_review": False,
+                "verification_notes": "Confidence above threshold. Proceeding to explainability.",
+                "explanation_summary": "High activation in right temporal lobe, slice 78.",
+                "pipeline_status": "complete",
+                "processing_time_s": 4.72,
+                "metadata": {
+                    "vision_model": "unet-monai-v1",
+                    "llm_model": "phi-3-mini-4bit",
+                    "rag_backend": "faiss",
+                    "timestamp": "2026-08-03T08:00:00+00:00",
+                },
+            }
+        }
+    }
+
+
+# ── Error response ─────────────────────────────────────────────────────────────
+
+
+class ErrorResponse(BaseModel):
+    """Returned as the response body when the pipeline raises an exception."""
+
+    detail: str = Field(description="Human-readable error message")
+    run_id: Optional[str] = Field(default=None)
+    pipeline_status: Literal["error"] = "error"

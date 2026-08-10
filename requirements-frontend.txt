@@ -1,0 +1,21 @@
+# ── requirements-frontend.txt ─────────────────────────────────────────────────
+# Installed inside docker/Dockerfile.frontend ONLY.
+# Minimal set — the frontend just calls the backend API via HTTP; no ML needed.
+
+# ── UI ────────────────────────────────────────────────────────────────────────
+streamlit>=1.34.0
+streamlit-extras>=0.4.0
+
+# ── Image handling (NIfTI preview + heatmap decode) ───────────────────────────
+Pillow>=10.0.0
+nibabel>=5.1.0
+numpy>=1.24.0
+matplotlib>=3.7.0
+
+# ── HTTP client (API calls to the backend) ────────────────────────────────────
+requests>=2.31.0
+httpx>=0.27.0
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0
+PyYAML>=6.0.1

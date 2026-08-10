@@ -1,0 +1,114 @@
+# =============================================================================
+# docker/docker-compose.yml
+# =============================================================================
+# NeuroAgent full-stack deployment.
+#
+# Usage
+# -----
+#   # Start both services (build images if not yet built):
+#   docker compose -f docker/docker-compose.yml up --build
+#
+#   # Start in detached mode (background):
+#   docker compose -f docker/docker-compose.yml up --build -d
+#
+#   # Stop everything:
+#   docker compose -f docker/docker-compose.yml down
+#
+#   # Run only the backend (e.g. to test the API):
+#   docker compose -f docker/docker-compose.yml up backend
+#
+#   # View logs:
+#   docker compose -f docker/docker-compose.yml logs -f
+#
+# Environment
+# -----------
+#   Copy .env.example → .env and fill in HUGGINGFACE_TOKEN, NCBI_API_KEY, etc.
+#   The compose file forwards the .env file to the backend container only.
+#   Frontend env vars (BACKEND_URL) are set inline below.
+#
+# Volumes
+# -------
+#   data/     and models/    are mounted from the HOST into the containers.
+#   They are NOT baked into the images because they contain large binary files
+#   (NIfTI scans, PyTorch weight checkpoints) that change independently of code.
+# =============================================================================
+
+version: "3.9"
+
+# ── Shared network ────────────────────────────────────────────────────────────
+networks:
+  neuroagent-net:
+    driver: bridge
+
+# ── Named volumes (host mounts) ───────────────────────────────────────────────
+# Declared here so compose knows they are external host paths.
+# Actual bind-mount paths are specified per-service below.
+
+services:
+
+  # ── Backend: FastAPI + LangGraph orchestrator ───────────────────────────────
+  backend:
+    build:
+      context: ..                          # project root (one level up from docker/)
+      dockerfile: docker/Dockerfile.backend
+    image: neuroagent-backend:latest
+    container_name: neuroagent-backend
+    restart: unless-stopped
+
+    ports:
+      - "8000:8000"                        # host:container
+
+    env_file:
+      - ../.env                            # loads HUGGINGFACE_TOKEN, NCBI_API_KEY, etc.
+
+    environment:
+      # Override / add env vars not in .env
+      MOCK_MODE: "${MOCK_MODE:-false}"     # default real pipeline; set true for UI-only demo
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+
+    volumes:
+      # Mount large files from host — never baked into image
+      - ../data:/app/data:ro              # read-only: raw scans, processed data
+      - ../models:/app/models:ro          # read-only: weight files, GradCAM overlays
+
+    networks:
+      - neuroagent-net
+
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s     # allow time for model weights to load
+      retries: 5
+
+  # ── Frontend: Streamlit dashboard ───────────────────────────────────────────
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.frontend
+    image: neuroagent-frontend:latest
+    container_name: neuroagent-frontend
+    restart: unless-stopped
+
+    ports:
+      - "8501:8501"
+
+    environment:
+      # Point at the backend service name on the shared network
+      BACKEND_URL: "http://backend:8000"
+
+    networks:
+      - neuroagent-net
+
+    depends_on:
+      backend:
+        condition: service_healthy        # wait until backend /health returns 200
+
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8501/healthz')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
