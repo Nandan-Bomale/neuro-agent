@@ -1,0 +1,58 @@
+# =============================================================================
+# docker/Dockerfile.frontend
+# =============================================================================
+# NeuroAgent Streamlit frontend image.
+#
+# Build:
+#   docker build -f docker/Dockerfile.frontend -t neuroagent-frontend:latest .
+#
+# Run (standalone, without compose):
+#   docker run --rm -p 8501:8501 \
+#     -e BACKEND_URL=http://localhost:8000 \
+#     neuroagent-frontend:latest
+#
+# Notes:
+#   - The frontend contains NO ML code — it only calls the backend over HTTP.
+#   - This image is therefore very small (~400 MB vs ~8 GB for the backend).
+#   - BACKEND_URL must point to the running backend container/service.
+# =============================================================================
+
+FROM python:3.11-slim
+
+# ── System dependencies ───────────────────────────────────────────────────────
+# libgomp1 : required by matplotlib / numpy
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Working directory ─────────────────────────────────────────────────────────
+WORKDIR /app
+
+# ── Python dependencies ───────────────────────────────────────────────────────
+COPY requirements-frontend.txt ./
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements-frontend.txt
+
+# ── Application source ────────────────────────────────────────────────────────
+# Only the frontend package is needed — no ML agents, no backend code.
+COPY frontend/ ./frontend/
+
+# ── Runtime configuration ─────────────────────────────────────────────────────
+EXPOSE 8501
+
+# BACKEND_URL is overridden in docker-compose.yml to point at the backend service.
+ENV BACKEND_URL=http://localhost:8000 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# ── Health check ──────────────────────────────────────────────────────────────
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8501/healthz')"
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+# sys.path fix is handled inside frontend/app.py (Path(__file__).parent.parent).
+CMD ["streamlit", "run", "frontend/app.py", \
+     "--server.port", "8501", \
+     "--server.address", "0.0.0.0", \
+     "--server.headless", "true", \
+     "--browser.gatherUsageStats", "false"]
