@@ -1,168 +1,387 @@
 """
 frontend/components/report_viewer.py
 --------------------------------------
-Full analysis results renderer using a responsive 3-column grid and SVGs.
+Full analysis results renderer — everything shown in the main area after the
+pipeline completes.
+
+Sections rendered (in order)
+-----------------------------
+  1. Status banner      — "Requires Human Review" (red) or "Analysis Complete" (green)
+  2. Confidence badge + key metric tiles
+  3. MRI + heatmap visualisation (delegates to heatmap_display.py)
+  4. Structured report  — tabbed: Findings | Impression | Recommendations | Reasoning
+  5. Literature citations — expandable citation cards
+  6. Technical details  — collapsible: run_id, models, processing time
 """
 
 from __future__ import annotations
-import json
+
+import logging
 from typing import Any
+
 import streamlit as st
-from frontend.components.heatmap_display import render_heatmap_centerpiece
 
-def _render_vision_card(vision_summary: dict, confidence: float, label: str) -> None:
-    detected = vision_summary.get("tumour_detected", False)
-    status = "Confirmed" if detected else "Clear"
-    status_class = "status-confirmed" if detected else "status-clear"
-    
-    html = f"""
-<div class="agent-card">
-    <div class="ac-header">
-        <div class="ac-icon">
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
-        </div>
-        <div>
-            <div class="ac-title">Vision Agent</div>
-            <div class="ac-subtitle">Tumor Segmentation</div>
-        </div>
-    </div>
-    <div class="ac-body" style="text-align:center;">
-        <div class="{status_class}">{status}</div>
-        <div style="font-size:0.75rem; color:#64748b; text-transform:uppercase; letter-spacing:0.1em;">Confidence: <span style="color:#e2e8f0;font-weight:600;">{int(confidence*100)}%</span></div>
-    </div>
-</div>
-"""
-    st.markdown(html, unsafe_allow_html=True)
+from frontend.components.heatmap_display import render_heatmap_display
 
-def _render_report_card(report: dict) -> None:
-    summary = report.get("impression", "Generating report...")
-    if len(summary) > 130:
-        summary = summary[:127] + "..."
-        
-    html = f"""
-<div class="agent-card">
-    <div class="ac-header">
-        <div class="ac-icon">
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" x2="8" y1="13" y2="13"/><line x1="16" x2="8" y1="17" y2="17"/><line x1="10" x2="8" y1="9" y2="9"/></svg>
-        </div>
-        <div>
-            <div class="ac-title">Report Gen Agent</div>
-            <div class="ac-subtitle">Report Preview</div>
-        </div>
-    </div>
-    <div class="ac-body">
-        <span class="text-highlight">Summary:</span> {summary}<br><br>
-        <div class="status-msg" style="color:#00c8ff;">Draft Generated</div>
-    </div>
-</div>
-"""
-    st.markdown(html, unsafe_allow_html=True)
+logger = logging.getLogger(__name__)
 
-def _render_clinical_card(patient: dict) -> None:
-    age = patient.get("age", "?")
-    sex = patient.get("sex", "?")
-    symptoms = ", ".join(patient.get("symptoms", [])) or "None reported"
-    meds = ", ".join(patient.get("medications", [])) or "None reported"
-    
-    html = f"""
-<div class="agent-card">
-    <div class="ac-header">
-        <div class="ac-icon">
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/><path d="M16 18h.01"/></svg>
-        </div>
-        <div>
-            <div class="ac-title">Clinical History Agent</div>
-            <div class="ac-subtitle">Patient Details</div>
-        </div>
-    </div>
-    <div class="ac-body">
-        <div style="font-family:'Outfit'; font-size:1.15rem; font-weight:600; color:#fff; margin-bottom:0.8rem; border-bottom:1px solid rgba(255,255,255,0.05); padding-bottom:0.5rem;">Patient ID: {id(patient) % 10000:04d} | {sex} {age}</div>
-        <span class="text-highlight">Symptoms:</span> {symptoms}<br><br>
-        <span class="text-highlight">Meds:</span> {meds}
-    </div>
-</div>
-"""
-    st.markdown(html, unsafe_allow_html=True)
 
-def _render_verification_card(confidence: float) -> None:
-    pct = int(confidence * 100)
-    rot = (pct / 100) * 180 - 135
-    
-    if pct >= 80:
-        msg = '<div class="status-msg" style="color:#00ff88;">Ready for Review</div>'
+# ── Internal renderers ─────────────────────────────────────────────────────────
+
+
+def _render_status_banner(requires_review: bool, verification_notes: str) -> None:
+    """Render the red (review required) or green (pass) status banner."""
+    if requires_review:
+        st.markdown(
+            f"""
+            <div class="banner-review">
+                <span class="banner-icon">⚠️</span>
+                <div>
+                    <div class="banner-title-review">Human Review Required</div>
+                    <div class="banner-text">{verification_notes or
+                    'Confidence below threshold. This case must be reviewed by a radiologist before clinical action.'}</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
     else:
-        msg = '<div class="status-msg" style="color:#ff9500;">Warning: Manual Review Recommended</div>'
-        
-    html = f"""
-<div class="agent-card">
-    <div class="ac-header">
-        <div class="ac-icon">
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-        </div>
-        <div>
-            <div class="ac-title">Verification Agent</div>
-            <div class="ac-subtitle">AI Confidence Score</div>
-        </div>
-    </div>
-    <div class="confidence-gauge-container">
-        <div class="gauge-semi">
-            <div class="gauge-fill" style="transform: rotate({rot}deg);"></div>
-            <div class="gauge-value">{pct}%</div>
-        </div>
-        {msg}
-    </div>
-</div>
-"""
-    st.markdown(html, unsafe_allow_html=True)
+        st.markdown(
+            f"""
+            <div class="banner-pass">
+                <span class="banner-icon">✅</span>
+                <div>
+                    <div class="banner-title-pass">Analysis Complete — Within Confidence Threshold</div>
+                    <div class="banner-text">{verification_notes or
+                    'All agents completed successfully. Report is ready for radiologist review.'}</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-def _render_literature_card(cited_literature: list) -> None:
-    lis = ""
-    for i, cit in enumerate(cited_literature[:2]):
-        title = cit.get("title", "Unknown")
-        year = cit.get("year", "")
-        lis += f'<li><span class="lit-num">{i+1}.</span> <div><span class="lit-title">{title}</span> ({year})</div></li>'
-        
-    html = f"""
-<div class="agent-card">
-    <div class="ac-header">
-        <div class="ac-icon">
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>
-        </div>
-        <div>
-            <div class="ac-title">Literature Agent</div>
-            <div class="ac-subtitle">Research Articles</div>
+
+def _render_confidence_panel(
+    confidence: float,
+    label: str,
+    vision_summary: dict[str, Any],
+    requires_review: bool,
+    processing_time: float,
+) -> None:
+    """
+    Render the circular confidence badge alongside three key metric tiles.
+    """
+    badge_class = f"cb-{label.lower()}"
+    label_class = f"cl-{label.lower()}"
+    pct = int(round(confidence * 100))
+
+    badge_html = f"""
+    <div class="confidence-wrap">
+        <div class="confidence-badge {badge_class}">
+            <span class="cb-score">{pct}%</span>
+            <span class="cb-label {label_class}">{label}</span>
+            <span class="cb-sub">Overall Confidence</span>
         </div>
     </div>
-    <ul class="lit-list">
-        {lis if lis else "<li style='color:#64748b; font-style:italic;'>No relevant literature found.</li>"}
-    </ul>
-</div>
-"""
-    st.markdown(html, unsafe_allow_html=True)
+    """
 
-def render_results(api_response: dict[str, Any], scan_bytes: bytes, scan_filename: str) -> None:
+    detected = vision_summary.get("tumour_detected", False)
+    vol_cc   = vision_summary.get("tumour_volume_cc", 0.0)
+
+    detected_val   = "Detected" if detected else "Not Found"
+    detected_color = "#f87171" if detected else "#34d399"
+    review_val     = "Required" if requires_review else "Not Required"
+    review_color   = "#fbbf24" if requires_review else "#34d399"
+
+    metrics_html = f"""
+    <div class="metric-grid">
+        <div class="metric-tile">
+            <div class="metric-val" style="color:{detected_color};">{detected_val}</div>
+            <div class="metric-lbl">Tumour Status</div>
+        </div>
+        <div class="metric-tile">
+            <div class="metric-val">{vol_cc:.1f} <span style="font-size:1rem;font-weight:500;color:#64748b;">cm³</span></div>
+            <div class="metric-lbl">Lesion Volume</div>
+        </div>
+        <div class="metric-tile">
+            <div class="metric-val" style="color:{review_color};">{review_val}</div>
+            <div class="metric-lbl">Human Review</div>
+        </div>
+    </div>
+    <div style="text-align:right;color:#334155;font-size:0.65rem;margin-top:-0.3rem;">
+        ⏱ Pipeline completed in <strong style="color:#475569;">{processing_time:.2f}s</strong>
+    </div>
+    """
+
+    col_badge, col_metrics = st.columns([1, 2.2], gap="large")
+    with col_badge:
+        st.markdown(badge_html, unsafe_allow_html=True)
+    with col_metrics:
+        st.markdown(metrics_html, unsafe_allow_html=True)
+
+
+def _render_report_tabs(report: dict[str, Any]) -> None:
+    """Render the structured report in a tabbed interface."""
+    st.markdown(
+        '<div class="section-header">📋 Clinical Report</div>',
+        unsafe_allow_html=True,
+    )
+
+    tab_findings, tab_impression, tab_recs, tab_reasoning = st.tabs(
+        ["🔍 Findings", "💡 Impression", "📌 Recommendations", "🔗 Reasoning"]
+    )
+
+    with tab_findings:
+        findings = report.get("findings", "No findings recorded.")
+        st.markdown(
+            f'<div class="report-text">{findings}</div>',
+            unsafe_allow_html=True,
+        )
+
+    with tab_impression:
+        impression = report.get("impression", "No impression recorded.")
+        st.markdown(
+            f'<div class="report-text">{impression}</div>',
+            unsafe_allow_html=True,
+        )
+
+    with tab_recs:
+        recs = report.get("recommendations", "No recommendations recorded.")
+        # Render numbered list nicely if newline-separated
+        lines = [ln.strip() for ln in recs.split("\n") if ln.strip()]
+        if lines:
+            items_html = "".join(
+                f'<div style="display:flex;gap:0.75rem;margin-bottom:0.6rem;">'
+                f'<span style="color:#6366f1;font-weight:700;flex-shrink:0;">{i+1}.</span>'
+                f'<span class="report-text" style="margin:0;">{line.lstrip("0123456789. ")}</span>'
+                f"</div>"
+                for i, line in enumerate(lines)
+            )
+            st.markdown(items_html, unsafe_allow_html=True)
+        else:
+            st.markdown(
+                f'<div class="report-text">{recs}</div>',
+                unsafe_allow_html=True,
+            )
+
+    with tab_reasoning:
+        reasoning = report.get("reasoning", "Reasoning chain not available.")
+        st.markdown(
+            f'<div class="report-reasoning">{reasoning}</div>',
+            unsafe_allow_html=True,
+        )
+
+
+def _render_citations(cited_literature: list[dict]) -> None:
+    """Render literature citations as expandable styled cards."""
+    n = len(cited_literature)
+    if n == 0:
+        return
+
+    st.markdown(
+        f'<div class="section-header">📚 Literature Citations '
+        f'<span style="color:#334155;font-weight:400;font-size:0.8rem;'
+        f'text-transform:none;letter-spacing:0;">({n} paper{"s" if n != 1 else ""} retrieved)</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    for i, cit in enumerate(cited_literature):
+        title   = cit.get("title", "Unknown Title")
+        authors = cit.get("authors", [])
+        journal = cit.get("journal", "")
+        year    = cit.get("year")
+        pmid    = cit.get("pubmed_id") or cit.get("pmid")
+        snippet = cit.get("relevance_snippet", "")
+        rel     = float(cit.get("relevance_score", 0.0))
+        cit_str = cit.get("citation_string") or cit.get("citation", "")
+
+        # Author string
+        if authors:
+            if len(authors) > 3:
+                author_str = ", ".join(authors[:3]) + " et al."
+            else:
+                author_str = ", ".join(authors)
+        else:
+            author_str = "Authors not listed"
+
+        # Meta line
+        meta_parts = [author_str]
+        if journal:
+            meta_parts.append(journal)
+        if year:
+            meta_parts.append(str(year))
+        meta_str = " · ".join(meta_parts)
+
+        pmid_html = (
+            f'<a class="cit-pmid" href="https://pubmed.ncbi.nlm.nih.gov/{pmid}/" '
+            f'target="_blank">PubMed ↗</a>'
+            if pmid
+            else ""
+        )
+
+        rel_pct = int(rel * 100)
+        rel_bar_width = f"{rel_pct}%"
+
+        with st.expander(f"📄  {title[:80]}{'…' if len(title) > 80 else ''}", expanded=False):
+            st.markdown(
+                f"""
+                <div class="citation-card">
+                    <div class="cit-title">{title}</div>
+                    <div class="cit-meta">{meta_str}{pmid_html}</div>
+                    {f'<div class="cit-snippet">"{snippet}"</div>' if snippet else ''}
+                    <div class="cit-rel-bar-wrap">
+                        <span class="cit-rel-label">Relevance</span>
+                        <div class="cit-rel-bar">
+                            <div class="cit-rel-fill" style="width:{rel_bar_width};"></div>
+                        </div>
+                        <span class="cit-rel-label">{rel_pct}%</span>
+                    </div>
+                    {f'<div style="font-size:0.72rem;color:#334155;margin-top:0.5rem;font-style:italic;">{cit_str}</div>' if cit_str else ''}
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+
+def _render_explanation(explanation_summary: str) -> None:
+    """Render the Explainability Agent's plain-language summary."""
+    if not explanation_summary:
+        return
+    st.markdown(
+        f"""
+        <div class="neuro-card" style="border-color:rgba(20,184,166,0.2);">
+            <div class="neuro-card-title">🎯 Explainability — Why This Region?</div>
+            <div class="neuro-card-body">{explanation_summary}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_technical_details(
+    api_response: dict[str, Any],
+    run_id: str,
+    processing_time: float,
+) -> None:
+    """Render technical pipeline metadata in a collapsible expander."""
+    metadata = api_response.get("metadata", {})
+    vision  = api_response.get("vision_summary", {})
+
+    rows = [
+        ("Run ID",         run_id[:36]),
+        ("Pipeline Mode",  metadata.get("mode", "—")),
+        ("Vision Model",   metadata.get("vision_model") or vision.get("model_version", "—")),
+        ("LLM Model",      metadata.get("llm_model", "—")),
+        ("RAG Backend",    metadata.get("rag_backend", "—")),
+        ("Pipeline Status",api_response.get("pipeline_status", "—")),
+        ("Processing Time",f"{processing_time:.3f} s"),
+        ("Confidence Threshold", "0.80 (HIGH) / 0.60 (MEDIUM)"),
+        ("GradCAM Slice",  str(vision.get("gradcam_slice", "—"))),
+        ("Tumour Voxels",  str(vision.get("tumour_volume_voxels", "—"))),
+    ]
+
+    tiles_html = "".join(
+        f'<div class="tech-detail-row">'
+        f'<span class="tech-key">{k}</span>'
+        f'<span class="tech-val">{v}</span>'
+        f"</div>"
+        for k, v in rows
+    )
+
+    with st.expander("⚙️  Technical Details", expanded=False):
+        st.markdown(
+            f'<div class="tech-detail-grid">{tiles_html}</div>',
+            unsafe_allow_html=True,
+        )
+        if run_id:
+            st.markdown(
+                f'<div style="font-size:0.65rem;color:#334155;margin-top:0.8rem;">'
+                f'Full run_id: <code style="color:#475569;">{run_id}</code></div>',
+                unsafe_allow_html=True,
+            )
+
+
+# ── Download helpers ───────────────────────────────────────────────────────────
+
+
+def _build_download_json(api_response: dict[str, Any]) -> str:
+    """Serialise the API response to a JSON string for download (heatmap excluded)."""
+    import json  # noqa: PLC0415
+
+    download_copy = {k: v for k, v in api_response.items() if k != "heatmap_b64"}
+    return json.dumps(download_copy, indent=2, ensure_ascii=False, default=str)
+
+
+# ── Public entry point ─────────────────────────────────────────────────────────
+
+
+def render_results(
+    api_response: dict[str, Any],
+    scan_bytes: bytes,
+    scan_filename: str,
+) -> None:
+    """
+    Render the complete analysis results dashboard.
+
+    Called from app.py once the API response is available in session_state.
+
+    Args:
+        api_response:  Full JSON dict from POST /api/analyze.
+        scan_bytes:    Raw bytes of the uploaded MRI scan (for original view).
+        scan_filename: Original filename of the uploaded scan.
+    """
     report          = api_response.get("report", {})
     vision_summary  = api_response.get("vision_summary", {})
     confidence      = float(api_response.get("confidence", 0.0))
     label           = api_response.get("confidence_label", "LOW")
+    requires_review = bool(api_response.get("requires_review", False))
     heatmap_b64     = api_response.get("heatmap_b64", "")
-    cited_lit       = report.get("cited_literature", [])
-    
-    patient_data = st.session_state.get("patient_data", {"age": 45, "sex": "M", "symptoms": ["headache"], "medications": []})
+    explanation     = api_response.get("explanation_summary", "")
+    verification    = api_response.get("verification_notes", "")
+    pipeline_status = api_response.get("pipeline_status", "complete")
+    processing_time = float(api_response.get("processing_time_s", 0.0))
+    run_id          = api_response.get("run_id", "")
 
-    col_left, col_center, col_right = st.columns([1, 1.4, 1], gap="medium")
-    
-    with col_left:
-        _render_vision_card(vision_summary, confidence, label)
-        _render_report_card(report)
-        
-    with col_center:
-        if heatmap_b64:
-            render_heatmap_centerpiece(heatmap_b64, scan_filename)
-        else:
-            st.warning("No heatmap data available.")
-            
-    with col_right:
-        _render_clinical_card(patient_data)
-        _render_verification_card(confidence)
-        _render_literature_card(cited_lit)
+    # ── 1. Status banner ──────────────────────────────────────────────────────
+    _render_status_banner(requires_review, verification)
+
+    # ── 2. Confidence badge + metrics ─────────────────────────────────────────
+    _render_confidence_panel(
+        confidence, label, vision_summary, requires_review, processing_time
+    )
+
+    # ── 3. Scan visualisation ─────────────────────────────────────────────────
+    if heatmap_b64:
+        render_heatmap_display(
+            scan_bytes=scan_bytes,
+            scan_filename=scan_filename,
+            heatmap_b64=heatmap_b64,
+            vision_summary=vision_summary,
+        )
+
+    # ── 4. Structured report tabs ─────────────────────────────────────────────
+    cited_literature = report.get("cited_literature", [])
+    _render_report_tabs(report)
+
+    # ── 5. Explainability summary ─────────────────────────────────────────────
+    _render_explanation(explanation)
+
+    # ── 6. Literature citations ───────────────────────────────────────────────
+    _render_citations(cited_literature)
+
+    # ── 7. Download + technical details ──────────────────────────────────────
+    st.markdown("<br>", unsafe_allow_html=True)
+    col_dl, col_tech = st.columns([1, 2])
+    with col_dl:
+        json_str = _build_download_json(api_response)
+        st.download_button(
+            label="⬇️  Download Report (JSON)",
+            data=json_str,
+            file_name=f"neuroagent_report_{run_id[:8]}.json",
+            mime="application/json",
+            use_container_width=True,
+            key="download_report",
+        )
+    with col_tech:
+        _render_technical_details(api_response, run_id, processing_time)
