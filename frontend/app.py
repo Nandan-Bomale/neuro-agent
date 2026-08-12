@@ -27,8 +27,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import time
+from pathlib import Path
 from typing import Any
+
+# ── Fix Python path so 'frontend.*' imports work from any working directory ────
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import requests
 import streamlit as st
