@@ -47,9 +47,15 @@ html, body, [class*="css"] {
 /* === Hide Streamlit Chrome === */
 #MainMenu { visibility: hidden; }
 footer { visibility: hidden; }
-header { visibility: hidden; }
 .stDeployButton { display: none !important; }
 [data-testid="stToolbar"] { display: none !important; }
+
+/* Keep header visible so sidebar toggle button works,
+   but make it blend into our dark background */
+header[data-testid="stHeader"] {
+    background: rgba(7, 12, 24, 0.95) !important;
+    border-bottom: 1px solid rgba(99,102,241,0.08) !important;
+}
 
 /* === Custom Scrollbar === */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
