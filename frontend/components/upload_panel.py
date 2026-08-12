@@ -1,15 +1,10 @@
 """
 frontend/components/upload_panel.py
 -------------------------------------
-Sidebar upload panel: MRI file uploader + patient details form.
+Left-column upload panel: MRI file uploader + patient details form.
 
-Renders entirely inside `with st.sidebar:` context (called from app.py).
-
-Returns
--------
-    scan_file   : UploadFile | None   — the uploaded file object
-    patient_data: dict                — validated patient metadata dict
-    run_clicked : bool                — True only on the frame the button is clicked
+Renders inside a `st.columns()` context in app.py (NOT in a sidebar).
+Returns (scan_file, patient_data_dict, run_clicked).
 """
 
 from __future__ import annotations
@@ -21,17 +16,20 @@ import streamlit as st
 
 def render_upload_panel() -> tuple[Any, dict, bool]:
     """
-    Render the sidebar logo, file uploader, patient form, and run button.
-
+    Render the MRI upload widget, patient form, and run button.
     Returns (scan_file, patient_data_dict, run_clicked).
     """
-    # ── Sidebar logo ─────────────────────────────────────────────────────────
+
+    # ── Panel header ──────────────────────────────────────────────────────────
     st.markdown(
         """
-        <div class="sb-logo">
-            <span class="sb-logo-icon">🧠</span>
-            <div class="sb-logo-title">NeuroAgent</div>
-            <div class="sb-logo-sub">Brain MRI Diagnosis Support</div>
+        <div style="text-align:center;padding:1rem 0 1.2rem;">
+            <span style="font-size:2.2rem;filter:drop-shadow(0 0 12px rgba(99,102,241,0.9));">🧠</span>
+            <div style="font-size:1.2rem;font-weight:800;background:linear-gradient(135deg,#818cf8,#34d399);
+                        -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+                        background-clip:text;letter-spacing:-0.03em;margin-top:0.2rem;">NeuroAgent</div>
+            <div style="font-size:0.6rem;color:#475569;letter-spacing:0.1em;
+                        text-transform:uppercase;margin-top:0.1rem;">Brain MRI Analysis</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -46,10 +44,7 @@ def render_upload_panel() -> tuple[Any, dict, bool]:
     scan_file = st.file_uploader(
         "MRI Scan",
         type=["nii", "gz", "png", "jpg", "jpeg"],
-        help=(
-            "Supported formats: NIfTI (.nii, .nii.gz) for multi-modal scans, "
-            "PNG / JPG for single-slice images."
-        ),
+        help="Supported: NIfTI (.nii, .nii.gz), PNG, JPG/JPEG",
         label_visibility="collapsed",
         key="scan_uploader",
     )
@@ -59,15 +54,9 @@ def render_upload_panel() -> tuple[Any, dict, bool]:
         size_str = f"{file_kb:.0f} KB" if file_kb < 1024 else f"{file_kb/1024:.1f} MB"
         st.markdown(
             f'<div style="color:#34d399;font-size:0.72rem;margin-top:0.3rem;'
-            f'padding:0.3rem 0.6rem;background:rgba(4,120,87,0.12);'
-            f'border-radius:6px;border:1px solid rgba(5,150,105,0.2);">'
-            f'✓ &nbsp;<strong>{scan_file.name}</strong> &nbsp;({size_str})</div>',
-            unsafe_allow_html=True,
-        )
-    else:
-        st.markdown(
-            '<div style="color:#475569;font-size:0.72rem;margin-top:0.3rem;'
-            'text-align:center;">Drag & drop or click to browse</div>',
+            f'padding:0.3rem 0.7rem;background:rgba(4,120,87,0.12);'
+            f'border-radius:7px;border:1px solid rgba(5,150,105,0.25);">'
+            f'✓ &nbsp;<strong>{scan_file.name}</strong>&nbsp; ({size_str})</div>',
             unsafe_allow_html=True,
         )
 
@@ -79,24 +68,14 @@ def render_upload_panel() -> tuple[Any, dict, bool]:
 
     col_a, col_b = st.columns(2)
     with col_a:
-        age = st.number_input(
-            "Age (yrs)",
-            min_value=0,
-            max_value=130,
-            value=45,
-            step=1,
-            key="patient_age",
-        )
+        age = st.number_input("Age (yrs)", min_value=0, max_value=130,
+                              value=45, step=1, key="patient_age")
     with col_b:
-        sex = st.selectbox(
-            "Sex",
-            options=["M", "F", "Other"],
-            key="patient_sex",
-        )
+        sex = st.selectbox("Sex", ["M", "F", "Other"], key="patient_sex")
 
     modality = st.selectbox(
         "Scan Modality",
-        options=["FLAIR", "T1", "T1ce", "T2", "DWI", "Other"],
+        ["FLAIR", "T1", "T1ce", "T2", "DWI", "Other"],
         help="Primary MRI modality of the uploaded scan",
         key="patient_modality",
     )
@@ -104,29 +83,29 @@ def render_upload_panel() -> tuple[Any, dict, bool]:
     symptoms_raw = st.text_input(
         "Symptoms",
         placeholder="headache, blurred vision, nausea",
-        help="Comma-separated list of reported symptoms",
+        help="Comma-separated",
         key="patient_symptoms",
     )
 
     history_raw = st.text_area(
         "Medical History",
         placeholder="hypertension, no prior malignancy",
-        height=62,
-        help="Relevant past conditions, comma-separated",
+        height=58,
+        help="Comma-separated past conditions",
         key="patient_history",
     )
 
     medications_raw = st.text_input(
         "Medications",
         placeholder="amlodipine 5mg, aspirin",
-        help="Current medications, comma-separated",
+        help="Comma-separated",
         key="patient_meds",
     )
 
     referring_notes = st.text_area(
         "Referring Notes",
         placeholder="Free-text clinical notes from the referring clinician…",
-        height=72,
+        height=68,
         key="patient_notes",
     )
 
@@ -156,21 +135,15 @@ def render_upload_panel() -> tuple[Any, dict, bool]:
     if scan_file is None:
         st.markdown(
             '<div style="color:#334155;font-size:0.7rem;text-align:center;'
-            'margin-top:0.4rem;">Upload a scan to enable analysis</div>',
+            'margin-top:0.35rem;">Upload a scan to enable analysis</div>',
             unsafe_allow_html=True,
         )
 
-    # ── Sidebar footer ────────────────────────────────────────────────────────
-    st.markdown("<br><br>", unsafe_allow_html=True)
+    # ── Small footer ──────────────────────────────────────────────────────────
     st.markdown(
-        '<hr style="border-color:rgba(99,102,241,0.1);">',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        '<div style="color:#334155;font-size:0.65rem;text-align:center;line-height:1.6;">'
-        '🔬 <strong style="color:#475569;">NeuroAgent</strong> v0.1.0<br>'
-        'Academic project · Not for clinical use<br>'
-        '<span style="color:#1e3060;">Nandan Bomale · 2026</span>'
+        '<div style="color:#1e3060;font-size:0.62rem;text-align:center;'
+        'margin-top:2rem;padding-top:0.8rem;border-top:1px solid rgba(99,102,241,0.1);">'
+        'NeuroAgent v0.1.0 · Academic project · Not for clinical use'
         '</div>',
         unsafe_allow_html=True,
     )
