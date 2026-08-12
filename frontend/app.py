@@ -24,6 +24,18 @@ State management (st.session_state):
 
 from __future__ import annotations
 
+# ── sys.path fix (MUST be before all project imports) ─────────────────────────
+# Streamlit adds the *script's directory* (frontend/) to sys.path, which means
+# `from frontend.X import Y` fails because Python looks for frontend/frontend/X.
+# We insert the project root so all `from frontend.X` and `from backend.X`
+# imports resolve correctly regardless of launch directory.
+import sys
+from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
 import json
 import logging
 import os
@@ -51,6 +63,7 @@ st.set_page_config(
 )
 
 # ── Import frontend modules (after set_page_config) ───────────────────────────
+# sys.path now includes project root, so `from frontend.X` resolves correctly.
 from frontend.styles import inject_css  # noqa: E402
 from frontend.components.upload_panel import render_upload_panel  # noqa: E402
 from frontend.components.report_viewer import render_results  # noqa: E402
@@ -258,11 +271,16 @@ def main() -> None:
     # ── Inject design system ──────────────────────────────────────────────────
     inject_css()
 
-    # ── Sidebar: upload panel ─────────────────────────────────────────────────
-    with st.sidebar:
+    # ── Full-width header ─────────────────────────────────────────────────────
+    _render_header()
+
+    # ── Two-column layout: controls left | results right ─────────────────────
+    col_controls, col_results = st.columns([1, 2.2], gap="large")
+
+    with col_controls:
         scan_file, patient_data, run_clicked = render_upload_panel()
 
-    # ── Track file changes — reset results when a new scan is uploaded ────────
+    # ── Track file changes — reset results on new upload ──────────────────────
     if scan_file is not None:
         fp = _file_fingerprint(scan_file)
         if st.session_state.get("last_file_id") != fp:
@@ -270,60 +288,60 @@ def main() -> None:
                 st.session_state.pop(key, None)
             st.session_state["last_file_id"] = fp
 
-    # ── Main area header ──────────────────────────────────────────────────────
-    _render_header()
-
     # ── Handle Run button click ───────────────────────────────────────────────
     if run_clicked and scan_file is not None:
         st.session_state.pop("error_msg", None)
-
-        with st.spinner("🧠  Running NeuroAgent pipeline — this may take 30–120s…"):
-            t0 = time.time()
-            try:
-                result = _call_analyze_api(scan_file, patient_data)
-                st.session_state["result"]     = result
-                st.session_state["scan_bytes"] = scan_file.getvalue()
-                st.session_state["scan_name"]  = scan_file.name
-                elapsed = time.time() - t0
-                logger.info(
-                    "Analysis complete | conf=%.2f | label=%s | time=%.1fs",
-                    result.get("confidence", 0),
-                    result.get("confidence_label"),
-                    elapsed,
-                )
-                st.rerun()
-
-            except requests.ConnectionError:
-                st.session_state["error_msg"] = (
-                    f"Cannot connect to the backend at {BACKEND_URL}.\n"
-                    "Please start the server: uvicorn backend.main:app --reload"
-                )
-            except requests.Timeout:
-                st.session_state["error_msg"] = (
-                    f"Request timed out after {REQUEST_TIMEOUT}s. "
-                    "The pipeline may still be running — try again."
-                )
-            except requests.HTTPError as exc:
+        with col_results:
+            with st.spinner("🧠  Running NeuroAgent pipeline…"):
+                t0 = time.time()
                 try:
-                    detail = exc.response.json().get("detail", str(exc))
-                except Exception:
-                    detail = str(exc)
-                st.session_state["error_msg"] = f"Backend error ({exc.response.status_code}): {detail}"
-            except Exception as exc:
-                st.session_state["error_msg"] = f"Unexpected error: {exc}"
+                    result = _call_analyze_api(scan_file, patient_data)
+                    st.session_state["result"]     = result
+                    st.session_state["scan_bytes"] = scan_file.getvalue()
+                    st.session_state["scan_name"]  = scan_file.name
+                    elapsed = time.time() - t0
+                    logger.info(
+                        "Analysis complete | conf=%.2f | label=%s | time=%.1fs",
+                        result.get("confidence", 0),
+                        result.get("confidence_label"),
+                        elapsed,
+                    )
+                    st.rerun()
 
-    # ── Render results or landing page ────────────────────────────────────────
-    if "error_msg" in st.session_state and st.session_state["error_msg"]:
-        _render_error(st.session_state["error_msg"])
+                except requests.ConnectionError:
+                    st.session_state["error_msg"] = (
+                        f"Cannot connect to the backend at {BACKEND_URL}.\n"
+                        "Please start: uvicorn backend.main:app --reload"
+                    )
+                except requests.Timeout:
+                    st.session_state["error_msg"] = (
+                        f"Request timed out after {REQUEST_TIMEOUT}s. Try again."
+                    )
+                except requests.HTTPError as exc:
+                    try:
+                        detail = exc.response.json().get("detail", str(exc))
+                    except Exception:
+                        detail = str(exc)
+                    st.session_state["error_msg"] = (
+                        f"Backend error ({exc.response.status_code}): {detail}"
+                    )
+                except Exception as exc:
+                    st.session_state["error_msg"] = f"Unexpected error: {exc}"
 
-    if "result" in st.session_state:
-        render_results(
-            api_response=st.session_state["result"],
-            scan_bytes=st.session_state["scan_bytes"],
-            scan_filename=st.session_state["scan_name"],
-        )
-    else:
-        _render_landing()
+    # ── Right column: results or landing page ─────────────────────────────────
+    with col_results:
+        if "error_msg" in st.session_state and st.session_state["error_msg"]:
+            _render_error(st.session_state["error_msg"])
+
+        if "result" in st.session_state:
+            render_results(
+                api_response=st.session_state["result"],
+                scan_bytes=st.session_state["scan_bytes"],
+                scan_filename=st.session_state["scan_name"],
+            )
+        else:
+            _render_landing()
+
 
 
 if __name__ == "__main__":
