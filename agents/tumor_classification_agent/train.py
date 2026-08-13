@@ -90,10 +90,11 @@ from agents.tumor_classification_agent.model import (
 # Constants
 # ---------------------------------------------------------------------------
 
-PHASE1_EPOCHS   = 25      # epochs with frozen backbone (heads need more time)
-PHASE2_LR_SCALE = 0.05   # phase-2 LR = phase-1 LR x 0.05 (conservative fine-tune)
-N_UNFREEZE      = 10      # param tensors to unfreeze per backbone in Phase 2
-                          # (was 30 → caused 18.8M trainable on tiny dataset = overfit)
+PHASE1_EPOCHS   = 25      # epochs with frozen backbone
+PHASE2_LR_SCALE = 0.05   # phase-2 backbone LR = phase-1 LR * 0.05
+N_UNFREEZE      = 120     # param tensors to unfreeze per backbone in Phase 2
+                          # EfficientNet-B4 has 420 total; 120 ≈ last 2 full MBConv blocks
+                          # (was 10 → only 6 actual conv tensors: not enough for MRI domain)
 
 
 # ---------------------------------------------------------------------------
@@ -167,9 +168,10 @@ def _train_epoch(
 ) -> Tuple[float, float]:
     """Run one full training epoch.
 
-    For the ensemble, individual_logits() is used so cross-entropy flows
-    through each backbone independently.  The averaged softmax is used only
-    to compute the accuracy metric.
+    Ensemble loss uses AVERAGED LOGITS (not sum of individual CE losses).
+    Averaging logits before CE forces all three backbones to cooperate:
+    none can minimise loss alone by predicting the easy 'notumor' class.
+    Gradient flows equally through each backbone via the 1/3 scaling.
 
     Returns:
         (mean_loss, mean_accuracy) over all batches.
@@ -188,13 +190,11 @@ def _train_epoch(
             if is_ensemble:
                 assert isinstance(model, TumorTypeEnsemble)
                 eff_l, res_l, den_l = model.individual_logits(images)
-                loss = (
-                    criterion(eff_l, labels)
-                    + criterion(res_l, labels)
-                    + criterion(den_l, labels)
-                ) / 3.0
-                # Use averaged softmax for accuracy
+                # Single CE on averaged logits — forces backbone cooperation
+                avg_l = (eff_l + res_l + den_l) / 3.0
+                loss  = criterion(avg_l, labels)
                 with torch.no_grad():
+                    # Accuracy from averaged softmax (inference behaviour)
                     probs = model(images)
             else:
                 logits = model(images)
@@ -246,12 +246,10 @@ def _val_epoch(
         if is_ensemble:
             assert isinstance(model, TumorTypeEnsemble)
             eff_l, res_l, den_l = model.individual_logits(images)
-            loss  = (
-                criterion(eff_l.float(), labels)
-                + criterion(res_l.float(), labels)
-                + criterion(den_l.float(), labels)
-            ) / 3.0
-            probs = model(images)
+            # Averaged logits — consistent with training loss
+            avg_l = (eff_l + res_l + den_l) / 3.0
+            loss  = criterion(avg_l.float(), labels)
+            probs = model(images)   # averaged softmax for accuracy
         else:
             logits = model(images)
             loss   = criterion(logits.float(), labels)
@@ -448,11 +446,30 @@ def train(
         phase2_lr  = lr * PHASE2_LR_SCALE
 
         model.set_phase(2, n_unfreeze=N_UNFREEZE)
-        optimizer = optim.AdamW(
-            filter(lambda p: p.requires_grad, model.parameters()),
-            lr=phase2_lr, weight_decay=1e-4,
-        )
-        scheduler = CosineAnnealingLR(optimizer, T_max=phase2_eps, eta_min=phase2_lr * 1e-3)
+
+        # Differential LR: newly unfrozen conv layers (pretrained ImageNet weights)
+        # need a much lower LR than the heads (randomly initialised).
+        # backbone LR = phase2_lr (5e-5),  head LR = phase2_lr * 5 (2.5e-4)
+        if is_ensemble:
+            head_ids = set()
+            for backbone, head_attr in [
+                (model.efficientnet_b4, "classifier"),
+                (model.resnet50,        "fc"),
+                (model.densenet121,     "classifier"),
+            ]:
+                head_ids.update(id(p) for p in getattr(backbone, head_attr).parameters())
+            backbone_p = [p for p in model.parameters() if p.requires_grad and id(p) not in head_ids]
+            head_p     = [p for p in model.parameters() if p.requires_grad and id(p) in head_ids]
+            optimizer  = optim.AdamW([
+                {"params": backbone_p, "lr": phase2_lr},
+                {"params": head_p,     "lr": phase2_lr * 5},
+            ], weight_decay=1e-4)
+        else:
+            optimizer = optim.AdamW(
+                filter(lambda p: p.requires_grad, model.parameters()),
+                lr=phase2_lr, weight_decay=1e-4,
+            )
+        scheduler = CosineAnnealingLR(optimizer, T_max=phase2_eps, eta_min=phase2_lr * 1e-2)
 
         print(f"\n{'─'*65}")
         print(f"  PHASE 2  |  Last {N_UNFREEZE} layers unfrozen  |  {phase2_eps} epochs  |  LR={phase2_lr:.0e}")
