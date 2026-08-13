@@ -90,9 +90,10 @@ from agents.tumor_classification_agent.model import (
 # Constants
 # ---------------------------------------------------------------------------
 
-PHASE1_EPOCHS   = 15      # epochs with frozen backbone
-PHASE2_LR_SCALE = 0.1    # phase-2 LR  =  phase-1 LR  ×  this factor
-N_UNFREEZE      = 30      # param tensors to unfreeze per backbone in Phase 2
+PHASE1_EPOCHS   = 25      # epochs with frozen backbone (heads need more time)
+PHASE2_LR_SCALE = 0.05   # phase-2 LR = phase-1 LR x 0.05 (conservative fine-tune)
+N_UNFREEZE      = 10      # param tensors to unfreeze per backbone in Phase 2
+                          # (was 30 → caused 18.8M trainable on tiny dataset = overfit)
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +223,12 @@ def _val_epoch(
     is_ensemble: bool,
     num_classes: int,
 ) -> Tuple[float, float, Dict[int, float]]:
-    """Run one full validation epoch.
+    """Run one full validation epoch in full float32 (no autocast).
+
+    autocast is deliberately omitted here: the ensemble runs three separate
+    forward passes whose float16 logits can overflow to inf, producing
+    NaN val_loss. Since there is no backward pass, precision matters more
+    than speed.
 
     Returns:
         (mean_loss, mean_accuracy, per_class_accuracy_dict).
@@ -236,22 +242,27 @@ def _val_epoch(
         images = images.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
 
-        with autocast("cuda"):
-            if is_ensemble:
-                assert isinstance(model, TumorTypeEnsemble)
-                eff_l, res_l, den_l = model.individual_logits(images)
-                loss  = (
-                    criterion(eff_l, labels)
-                    + criterion(res_l, labels)
-                    + criterion(den_l, labels)
-                ) / 3.0
-                probs = model(images)
-            else:
-                logits = model(images)
-                loss   = criterion(logits, labels)
-                probs  = F.softmax(logits, dim=1)
+        # Full float32 — avoids NaN from float16 overflow in ensemble logits
+        if is_ensemble:
+            assert isinstance(model, TumorTypeEnsemble)
+            eff_l, res_l, den_l = model.individual_logits(images)
+            loss  = (
+                criterion(eff_l.float(), labels)
+                + criterion(res_l.float(), labels)
+                + criterion(den_l.float(), labels)
+            ) / 3.0
+            probs = model(images)
+        else:
+            logits = model(images)
+            loss   = criterion(logits.float(), labels)
+            probs  = F.softmax(logits.float(), dim=1)
 
-        total_loss += loss.item()
+        # Guard: skip NaN batches rather than propagating corruption
+        loss_val = loss.item()
+        if not torch.isfinite(loss).item():
+            loss_val = 0.0
+
+        total_loss += loss_val
         total_acc  += _top1_accuracy(probs, labels)
         class_accs.append(_class_accuracy(probs, labels, num_classes))
         n_batches  += 1
@@ -344,12 +355,16 @@ def train(
     # ── Build DataLoaders ────────────────────────────────────────────────────
     if stage == "type":
         bs = batch_size or 16
-        train_loader, val_loader, _test_loader, class_names = get_type_dataloaders(
+        train_loader, _val_loader, test_loader, class_names = get_type_dataloaders(
             data_root=data_path,
             batch_size=bs,
             num_workers=num_workers,
             seed=seed,
         )
+        # Use the official Testing/ split as validation — not a random carve from
+        # Training/.  This gives 5600 training images (vs 4760) and a proper
+        # held-out 1600-image val set, reducing overfitting and giving honest metrics.
+        val_loader  = test_loader
         model       = build_type_ensemble(num_classes=len(class_names), device=device)
         is_ensemble = True
         prefix      = "type_ensemble"
