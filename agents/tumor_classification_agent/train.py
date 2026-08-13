@@ -554,7 +554,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--label-smoothing", type=float, default=0.1,
-        help="Label smoothing ε. Default: 0.1.",
+        help="Label smoothing eps (0=standard CE, 0.1=default).",
     )
     return p
 
