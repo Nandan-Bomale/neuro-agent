@@ -1,19 +1,32 @@
 """
 inference.py
 ------------
-Load trained weights and run a two-stage prediction pipeline:
+Two-stage prediction pipeline for the Tumor Classification Agent.
 
-  Stage 1 — Predict tumor type (glioma / meningioma / pituitary / no_tumor)
-  Stage 2 — Predict glioma grade (grade_II / grade_III / grade_IV)
-             [only executed when Stage 1 = glioma]
+Stage 1 — Predict tumor type from a 2-D MRI slice.
+    Model : TumorTypeEnsemble (EfficientNet-B4 + ResNet-50 + DenseNet-121)
+    Output: one of glioma / meningioma / notumor / pituitary
 
-Accepts either a file-path (str/Path) or a pre-loaded numpy array as input.
+Stage 2 — Predict glioma grade (only when Stage 1 → glioma).
+    Model : TumorGradeClassifier (EfficientNet-B4)
+    Output: one of grade_II / grade_III / grade_IV
 
 Test-Time Augmentation (TTA)
-----------------------------
-When tta=True (the default), inference runs 10 augmented views of the input
-image and averages the softmax outputs before argmax.  This consistently
-improves accuracy on unseen MRI slices by ~1–2 %.
+-----------------------------
+When tta=True (default), 10 augmented views of the input are passed through
+each model and the softmax outputs are averaged before argmax.
+This consistently yields +1–2 % accuracy on unseen MRI slices.
+
+Input formats accepted
+-----------------------
+• str / Path     — file path to any PIL-readable image (JPEG, PNG, TIFF…)
+• np.ndarray     — H×W, H×W×1 (grayscale) or H×W×3 (RGB) array,
+                   any dtype (auto-normalised to uint8)
+
+Confidence
+----------
+Overall confidence = geometric mean of the type and grade max-probabilities
+when both stages run, otherwise = type max-probability alone.
 
 Usage
 -----
@@ -24,148 +37,172 @@ Usage
         grade_ckpt = "models/tumor_classifier/grade_classifier_best.pth",
     )
 
-    result = predictor.predict("path/to/mri_slice.jpg")
+    result = predictor.predict("data/sample_slice.jpg")
     # result["tumor_type"]          -> "glioma"
-    # result["tumor_grade"]         -> "grade_IV"   (or None)
+    # result["tumor_grade"]         -> "grade_IV"
     # result["type_probabilities"]  -> {"glioma": 0.94, ...}
     # result["grade_probabilities"] -> {"grade_II": 0.05, ...}
-    # result["confidence"]          -> 0.94
+    # result["confidence"]          -> 0.91
     # result["tta_used"]            -> True
 """
 
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from PIL import Image
 
-from agents.tumor_classification_agent.dataset import get_tta_transforms, _val_transforms
+from agents.tumor_classification_agent.dataset import (
+    _val_transforms,
+    get_tta_transforms,
+)
 from agents.tumor_classification_agent.model import (
+    TumorGradeClassifier,
+    TumorTypeEnsemble,
     build_grade_classifier,
     build_type_ensemble,
 )
 
 
 # ---------------------------------------------------------------------------
-# Default class names (fallback if no metadata JSON is found)
+# Default class lists  (fallback if no JSON sidecar exists)
 # ---------------------------------------------------------------------------
 
+# Must match the folder names in Training/ — confirmed: notumor (no underscore)
 DEFAULT_TYPE_CLASSES  = ["glioma", "meningioma", "notumor", "pituitary"]
 DEFAULT_GRADE_CLASSES = ["grade_II", "grade_III", "grade_IV"]
 
-TTA_N = 10  # number of TTA augmented views
+TTA_N = 10   # number of TTA augmented views
 
 
 # ---------------------------------------------------------------------------
-# Image loading utilities
+# Image loading
 # ---------------------------------------------------------------------------
 
-def _load_image(source: Union[str, Path, np.ndarray]) -> Image.Image:
-    """Load an MRI slice from a file path or numpy array.
+def _load_pil(source: Union[str, Path, np.ndarray]) -> Image.Image:
+    """Load a 2-D MRI slice as a PIL Image (always returns RGB mode).
 
-    Grayscale arrays / single-channel images are accepted; RGB conversion is
-    handled downstream by GrayscaleToRGB in the dataset transforms.
-
-    Args:
-        source: File path (str / Path) or H×W or H×W×C numpy array.
+    Accepts:
+        str / Path  — any PIL-readable file (JPEG, PNG, TIFF, BMP…)
+        np.ndarray  — H×W, H×W×1, or H×W×3; any numeric dtype.
+                      Normalised to [0, 255] uint8 when not already uint8.
 
     Returns:
-        PIL Image in mode 'L' (grayscale) or 'RGB'.
+        PIL Image in mode 'RGB'.
+
+    Raises:
+        TypeError  if source is not a recognised type.
+        ValueError if array has an unsupported shape.
     """
     if isinstance(source, (str, Path)):
         img = Image.open(str(source))
-    elif isinstance(source, np.ndarray):
-        arr = source
+        return img.convert("RGB")
+
+    if isinstance(source, np.ndarray):
+        arr = source.copy()
+        # Normalise to [0, 255] uint8
         if arr.dtype != np.uint8:
-            # Normalise to [0, 255]
-            arr = arr - arr.min()
-            if arr.max() > 0:
-                arr = (arr / arr.max() * 255).astype(np.uint8)
-            else:
-                arr = arr.astype(np.uint8)
+            arr = arr.astype(np.float32)
+            mn, mx = arr.min(), arr.max()
+            if mx > mn:
+                arr = (arr - mn) / (mx - mn) * 255.0
+            arr = arr.astype(np.uint8)
+
         if arr.ndim == 2:
-            img = Image.fromarray(arr, mode="L")
-        elif arr.ndim == 3 and arr.shape[2] == 1:
-            img = Image.fromarray(arr[:, :, 0], mode="L")
-        elif arr.ndim == 3 and arr.shape[2] == 3:
-            img = Image.fromarray(arr, mode="RGB")
-        else:
-            raise ValueError(
-                f"Unsupported array shape for MRI slice: {arr.shape}. "
-                "Expected H×W, H×W×1, or H×W×3."
-            )
-    else:
-        raise TypeError(
-            f"source must be a file path or numpy array, got {type(source)}"
+            return Image.fromarray(arr, mode="L").convert("RGB")
+        if arr.ndim == 3 and arr.shape[2] == 1:
+            return Image.fromarray(arr[:, :, 0], mode="L").convert("RGB")
+        if arr.ndim == 3 and arr.shape[2] == 3:
+            return Image.fromarray(arr, mode="RGB")
+
+        raise ValueError(
+            f"Unsupported array shape {arr.shape}. Expected H×W, H×W×1, or H×W×3."
         )
-    return img
+
+    raise TypeError(
+        f"source must be a file path (str/Path) or numpy array, got {type(source).__name__}"
+    )
 
 
-def _load_class_names(
-    checkpoint_path: str,
-    default: List[str],
-) -> List[str]:
-    """Try to load class names from a JSON sidecar file next to the checkpoint.
+# ---------------------------------------------------------------------------
+# Class-name sidecar loader
+# ---------------------------------------------------------------------------
 
-    Falls back to *default* if no sidecar is found.
+def _load_class_names(checkpoint_path: str, default: List[str]) -> List[str]:
+    """Try to load class names from a JSON sidecar next to the checkpoint.
 
-    Convention: checkpoint 'foo_best.pth' → sidecar 'foo_classes.json'.
+    Convention:
+        checkpoint: models/.../type_ensemble_best.pth
+        sidecar:    models/.../type_ensemble_classes.json
+
+    Strips trailing '_best', '_epNNN' or '_epochNNN' from the checkpoint stem
+    to derive the sidecar stem.
+
+    Returns:
+        List of class name strings, or *default* if no sidecar is found.
     """
-    ckpt_path   = Path(checkpoint_path)
-    # Strip _best / _epochXXX suffix
-    stem = ckpt_path.stem
-    for suffix in ("_best", *[f"_epoch{i:03d}" for i in range(1, 200)]):
+    ckpt   = Path(checkpoint_path)
+    stem   = ckpt.stem
+    # Strip common suffixes
+    for suffix in ["_best"] + [f"_ep{i:03d}" for i in range(1, 200)] + [f"_epoch{i:03d}" for i in range(1, 200)]:
         if stem.endswith(suffix):
             stem = stem[: -len(suffix)]
             break
-    sidecar = ckpt_path.parent / f"{stem}_classes.json"
+    sidecar = ckpt.parent / f"{stem}_classes.json"
     if sidecar.exists():
-        data = json.loads(sidecar.read_text())
-        return data.get("class_names", default)
+        try:
+            data = json.loads(sidecar.read_text())
+            return data.get("class_names", default)
+        except Exception as exc:
+            warnings.warn(f"Could not parse class sidecar {sidecar}: {exc}")
     return default
 
 
 # ---------------------------------------------------------------------------
-# TTA helper
+# Core TTA inference helper
 # ---------------------------------------------------------------------------
 
-def _run_tta(
-    model:      torch.nn.Module,
-    img:        Image.Image,
-    transforms: list,
-    device:     torch.device,
+def _tta_predict(
+    model:       torch.nn.Module,
+    img:         Image.Image,
+    transforms:  List,
+    device:      torch.device,
     is_ensemble: bool,
 ) -> torch.Tensor:
-    """Run model on *n* augmented views of *img* and return averaged probabilities.
+    """Run model on all TTA views and return averaged probability vector.
 
     Args:
-        model:       Model in eval mode.
-        img:         PIL Image.
-        transforms:  List of transform objects (one per TTA view).
+        model:       Model in eval() mode.
+        img:         PIL Image (RGB).
+        transforms:  List of torchvision transform objects (one per TTA view).
         device:      Compute device.
-        is_ensemble: If True, use ``model.predict_proba``; else softmax logits.
+        is_ensemble: True → use model.forward() which already returns probs.
+                     False → apply softmax to raw logits.
 
     Returns:
-        Averaged probability tensor of shape ``(num_classes,)``.
+        1-D probability tensor of shape (num_classes,), averaged over all views.
     """
-    accumulated = None
+    model.eval()
+    accumulated: Optional[torch.Tensor] = None
 
-    for tfm in transforms:
-        tensor = tfm(img).unsqueeze(0).to(device)
-        with torch.no_grad():
+    with torch.no_grad():
+        for tfm in transforms:
+            tensor = tfm(img).unsqueeze(0).to(device, non_blocking=True)
             if is_ensemble:
-                probs = model.predict_proba(tensor).squeeze(0)
+                probs = model(tensor).squeeze(0)           # forward() returns probs
             else:
                 logits = model(tensor)
-                probs  = torch.softmax(logits, dim=1).squeeze(0)
+                probs  = F.softmax(logits, dim=1).squeeze(0)
 
-        accumulated = probs if accumulated is None else accumulated + probs
+            accumulated = probs if accumulated is None else accumulated + probs
 
-    return accumulated / len(transforms)
+    return accumulated / len(transforms)   # type: ignore[operator]
 
 
 # ---------------------------------------------------------------------------
@@ -175,18 +212,14 @@ def _run_tta(
 class TumorPredictor:
     """Two-stage tumor classification predictor.
 
-    Stage 1 — Ensemble predicts tumor type (4 classes).
-    Stage 2 — EfficientNet-B4 predicts glioma grade (3 classes), called only
-               when Stage 1 output is "glioma".
-
-    Both models are loaded lazily on the first call to ``predict``.
+    Models are loaded lazily on the first call to ``predict()``.
 
     Args:
-        type_ckpt:   Path to the Stage-1 ensemble checkpoint (.pth).
-        grade_ckpt:  Path to the Stage-2 grade classifier checkpoint (.pth).
+        type_ckpt:   Path to Stage-1 ensemble checkpoint (.pth).
+        grade_ckpt:  Path to Stage-2 grade classifier checkpoint (.pth).
         device:      Compute device.  Auto-detected if None.
-        tta:         Whether to use Test-Time Augmentation (default True).
-        tta_n:       Number of TTA augmented views (default 10).
+        tta:         Enable Test-Time Augmentation (default True).
+        tta_n:       Number of TTA views (default 10).
     """
 
     def __init__(
@@ -194,8 +227,8 @@ class TumorPredictor:
         type_ckpt:  str,
         grade_ckpt: str,
         device:     Optional[torch.device] = None,
-        tta:        bool = True,
-        tta_n:      int  = TTA_N,
+        tta:        bool                   = True,
+        tta_n:      int                    = TTA_N,
     ) -> None:
         self.type_ckpt   = type_ckpt
         self.grade_ckpt  = grade_ckpt
@@ -206,103 +239,104 @@ class TumorPredictor:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.device = device
 
-        self._type_model:  Optional[torch.nn.Module] = None
-        self._grade_model: Optional[torch.nn.Module] = None
+        # Models loaded lazily
+        self._type_model:  Optional[TumorTypeEnsemble]     = None
+        self._grade_model: Optional[TumorGradeClassifier]  = None
         self._type_classes:  List[str] = []
         self._grade_classes: List[str] = []
 
-        # Pre-compute TTA transforms once
-        self._tta_transforms  = get_tta_transforms(n_augmentations=tta_n)
-        self._clean_transform = _val_transforms()
+        # Build transforms once at init
+        self._tta_transforms   = get_tta_transforms(n_augmentations=tta_n)
+        self._clean_transforms = [_val_transforms()]
 
         print(
-            f"[TumorPredictor] device={device} | TTA={tta} (n={tta_n})"
+            f"[TumorPredictor] Initialised | device={device} | "
+            f"TTA={tta} (n={tta_n})"
         )
 
-    # ── Lazy loaders ─────────────────────────────────────────────────────────
+    # ── Lazy model loaders ───────────────────────────────────────────────────
 
-    def _ensure_type_model(self) -> None:
+    def _load_type_model(self) -> None:
         if self._type_model is not None:
             return
-        if not Path(self.type_ckpt).exists():
+        ckpt = self.type_ckpt
+        if not Path(ckpt).exists():
             raise FileNotFoundError(
-                f"[TumorPredictor] Type checkpoint not found: {self.type_ckpt}\n"
-                "Train Stage 1 first:  python -m agents.tumor_classification_agent.train "
-                "--stage type --data-path <path> --save-dir models/tumor_classifier/"
+                f"[TumorPredictor] Type checkpoint not found: {ckpt}\n"
+                "Train Stage 1 first:\n"
+                "  python -m agents.tumor_classification_agent.train "
+                "--stage type --data-path data/tumor_classification/type/ "
+                "--save-dir models/tumor_classifier/"
             )
-        self._type_classes = _load_class_names(self.type_ckpt, DEFAULT_TYPE_CLASSES)
+        self._type_classes = _load_class_names(ckpt, DEFAULT_TYPE_CLASSES)
         self._type_model   = build_type_ensemble(
             num_classes=len(self._type_classes),
-            checkpoint_path=self.type_ckpt,
+            checkpoint_path=ckpt,
             device=self.device,
         )
         self._type_model.eval()
-        print(
-            f"[TumorPredictor] Type model loaded | "
-            f"classes={self._type_classes}"
-        )
+        print(f"[TumorPredictor] Type model ready | classes={self._type_classes}")
 
-    def _ensure_grade_model(self) -> None:
+    def _load_grade_model(self) -> None:
         if self._grade_model is not None:
             return
-        if not Path(self.grade_ckpt).exists():
+        ckpt = self.grade_ckpt
+        if not Path(ckpt).exists():
             raise FileNotFoundError(
-                f"[TumorPredictor] Grade checkpoint not found: {self.grade_ckpt}\n"
-                "Train Stage 2 first:  python -m agents.tumor_classification_agent.train "
-                "--stage grade --data-path <path> --save-dir models/tumor_classifier/"
+                f"[TumorPredictor] Grade checkpoint not found: {ckpt}\n"
+                "Train Stage 2 first:\n"
+                "  python -m agents.tumor_classification_agent.train "
+                "--stage grade --data-path data/tumor_classification/grade/ "
+                "--brats-path data/raw/BraTS2020_TrainingData/ "
+                "--save-dir models/tumor_classifier/"
             )
-        self._grade_classes = _load_class_names(self.grade_ckpt, DEFAULT_GRADE_CLASSES)
+        self._grade_classes = _load_class_names(ckpt, DEFAULT_GRADE_CLASSES)
         self._grade_model   = build_grade_classifier(
             num_classes=len(self._grade_classes),
-            checkpoint_path=self.grade_ckpt,
+            checkpoint_path=ckpt,
             device=self.device,
         )
         self._grade_model.eval()
-        print(
-            f"[TumorPredictor] Grade model loaded | "
-            f"classes={self._grade_classes}"
-        )
+        print(f"[TumorPredictor] Grade model ready | classes={self._grade_classes}")
 
-    # ── Core predict ─────────────────────────────────────────────────────────
+    # ── Public predict ───────────────────────────────────────────────────────
 
     def predict(
         self,
-        source:      Union[str, Path, np.ndarray],
-        run_grade:   Optional[bool] = None,
+        source:    Union[str, Path, np.ndarray],
+        run_grade: Optional[bool] = None,
     ) -> Dict:
-        """Run the two-stage prediction pipeline on one MRI slice.
+        """Run the full two-stage prediction on one MRI slice.
 
         Args:
-            source:    File path (str / Path) or 2-D numpy array representing
-                       a single MRI slice.
-            run_grade: Override whether to run Stage 2.  If None (default),
-                       Stage 2 runs automatically when Stage 1 predicts "glioma".
+            source:    File path or 2-D numpy array representing one MRI slice.
+            run_grade: Override Stage-2 execution.  If None (default), Stage 2
+                       runs automatically when Stage 1 predicts "glioma".
 
         Returns:
             dict with keys:
-                tumor_type         (str)
-                tumor_grade        (str | None)
-                type_probabilities (dict[str, float])
+                tumor_type          (str)
+                tumor_grade         (str | None)
+                type_probabilities  (dict[str, float])
                 grade_probabilities (dict[str, float] | None)
-                confidence         (float)  — max probability across classes
-                tta_used           (bool)
+                confidence          (float)
+                tta_used            (bool)
         """
-        self._ensure_type_model()
+        self._load_type_model()
+        img      = _load_pil(source)
+        tfm_list = self._tta_transforms if self.tta else self._clean_transforms
 
-        img      = _load_image(source)
-        tfm_list = self._tta_transforms if self.tta else [self._clean_transform]
-
-        # ── Stage 1: Tumor Type ───────────────────────────────────────────────
-        type_probs_tensor = _run_tta(
+        # ── Stage 1: Tumor type ───────────────────────────────────────────────
+        type_probs = _tta_predict(
             model=self._type_model,
             img=img,
             transforms=tfm_list,
             device=self.device,
-            is_ensemble=True,
+            is_ensemble=True,           # forward() already returns averaged softmax
         )
-        type_probs_np  = type_probs_tensor.cpu().numpy()
-        type_idx       = int(np.argmax(type_probs_np))
-        tumor_type     = self._type_classes[type_idx]
+        type_probs_np   = type_probs.cpu().numpy()
+        type_idx        = int(np.argmax(type_probs_np))
+        tumor_type      = self._type_classes[type_idx]
         type_confidence = float(type_probs_np[type_idx])
 
         type_probabilities = {
@@ -310,51 +344,62 @@ class TumorPredictor:
             for cls, p in zip(self._type_classes, type_probs_np)
         }
 
-        # ── Stage 2: Glioma Grade ─────────────────────────────────────────────
+        # ── Stage 2: Glioma grade ─────────────────────────────────────────────
         should_grade = (
             run_grade if run_grade is not None else (tumor_type == "glioma")
         )
         tumor_grade         = None
         grade_probabilities = None
-        confidence          = type_confidence
+        confidence          = round(type_confidence, 4)
 
         if should_grade:
-            self._ensure_grade_model()
-
-            grade_probs_tensor = _run_tta(
+            self._load_grade_model()
+            grade_probs = _tta_predict(
                 model=self._grade_model,
                 img=img,
                 transforms=tfm_list,
                 device=self.device,
                 is_ensemble=False,
             )
-            grade_probs_np = grade_probs_tensor.cpu().numpy()
-            grade_idx      = int(np.argmax(grade_probs_np))
-            tumor_grade    = self._grade_classes[grade_idx]
-            grade_conf     = float(grade_probs_np[grade_idx])
+            grade_probs_np  = grade_probs.cpu().numpy()
+            grade_idx       = int(np.argmax(grade_probs_np))
+            tumor_grade     = self._grade_classes[grade_idx]
+            grade_confidence = float(grade_probs_np[grade_idx])
 
             grade_probabilities = {
                 cls: round(float(p), 4)
                 for cls, p in zip(self._grade_classes, grade_probs_np)
             }
 
-            # Overall confidence = geometric mean of type and grade confidence
-            confidence = round(float(np.sqrt(type_confidence * grade_conf)), 4)
+            # Geometric mean of both stages' max-probabilities
+            confidence = round(float(np.sqrt(type_confidence * grade_confidence)), 4)
 
         return {
             "tumor_type":          tumor_type,
             "tumor_grade":         tumor_grade,
             "type_probabilities":  type_probabilities,
             "grade_probabilities": grade_probabilities,
-            "confidence":          round(confidence, 4),
+            "confidence":          confidence,
             "tta_used":            self.tta,
         }
+
+    # ── Helpers ──────────────────────────────────────────────────────────────
+
+    @property
+    def type_classes(self) -> List[str]:
+        """Type class names (populated after first predict call)."""
+        return self._type_classes or DEFAULT_TYPE_CLASSES
+
+    @property
+    def grade_classes(self) -> List[str]:
+        """Grade class names (populated after first grade predict call)."""
+        return self._grade_classes or DEFAULT_GRADE_CLASSES
 
     def __repr__(self) -> str:
         return (
             f"TumorPredictor("
             f"device={self.device}, "
-            f"type_ckpt='{Path(self.type_ckpt).name}', "
-            f"grade_ckpt='{Path(self.grade_ckpt).name}', "
-            f"tta={self.tta})"
+            f"type_loaded={self._type_model is not None}, "
+            f"grade_loaded={self._grade_model is not None}, "
+            f"tta={self.tta}, tta_n={self.tta_n})"
         )

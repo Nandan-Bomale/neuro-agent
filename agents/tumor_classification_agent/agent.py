@@ -1,42 +1,51 @@
 """
 agent.py
 --------
-TumorClassificationAgent — public interface for the Tumor Classification Agent.
+TumorClassificationAgent — the single public interface the Orchestrator imports.
 
-This is the only file the Orchestrator imports.  All model loading, TTA,
-and two-stage pipeline logic lives in inference.py.
+Pipeline
+--------
+    Stage 1 (always):
+        TumorTypeEnsemble predicts one of:
+            glioma | meningioma | notumor | pituitary
 
-Interface contract
-------------------
-Input  (state dict) :
+    Stage 2 (only when Stage 1 → glioma):
+        TumorGradeClassifier predicts one of:
+            grade_II | grade_III | grade_IV
+
+Input  (state dict)
+-------------------
     Required — one of:
-        mri_slice_path   (str)         path to a 2-D MRI slice image
-        mri_slice_array  (np.ndarray)  2-D / H×W×C numpy array
+        "mri_slice_path"   (str | Path)   path to any PIL-readable 2-D MRI slice
+        "mri_slice_array"  (np.ndarray)   H×W, H×W×1, or H×W×3 array
 
     Optional:
-        vision_findings  (dict)        output from VisionAgent (for context logging)
+        "vision_findings"  (dict)          VisionAgent output, used for context logging
 
-Output (dict):
+Output (dict)
+-------------
     {
-        "agent_name":  "tumor_classification_agent",
-        "success":     True,
-        "confidence":  0.94,
+        "agent_name": "tumor_classification_agent",
+        "success":    True,
+        "confidence": 0.94,
         "output": {
             "tumor_type":          "glioma",
             "tumor_grade":         "grade_IV",     # None if not glioma
-            "type_probabilities":  {"glioma": 0.94, "meningioma": 0.03, ...},
-            "grade_probabilities": {"grade_II": 0.05, "grade_III": 0.18, "grade_IV": 0.77},
-            "clinical_urgency":    "urgent",        # "urgent" | "routine" | "monitor"
+            "type_probabilities":  {"glioma": 0.94, "meningioma": 0.03,
+                                    "notumor": 0.01, "pituitary": 0.02},
+            "grade_probabilities": {"grade_II": 0.05, "grade_III": 0.18,
+                                    "grade_IV": 0.77},  # None if not glioma
+            "clinical_urgency":    "urgent",        # urgent | monitor | routine
             "tta_used":            True,
         },
         "error": None
     }
 
-Clinical Urgency Mapping
-------------------------
-urgent  : glioma grade_IV  OR  glioma grade_III
-monitor : glioma grade_II  OR  meningioma
-routine : pituitary  OR  no_tumor
+Clinical urgency
+----------------
+    urgent  : glioma grade_IV  OR  glioma grade_III
+    monitor : glioma grade_II  OR  meningioma  OR  glioma (grade unknown)
+    routine : notumor  OR  pituitary
 
 Usage
 -----
@@ -49,11 +58,8 @@ Usage
 
     result = agent.run({
         "mri_slice_path": "data/sample_slice.jpg",
-        "vision_findings": {...},   # optional VisionAgent output
+        "vision_findings": {...},   # optional
     })
-
-    print(result["output"]["tumor_type"])
-    print(result["output"]["clinical_urgency"])
 """
 
 from __future__ import annotations
@@ -73,44 +79,39 @@ from agents.tumor_classification_agent.inference import TumorPredictor
 # Constants
 # ---------------------------------------------------------------------------
 
-#: Default checkpoint paths — override in TumorClassificationAgent.__init__()
+AGENT_NAME = "tumor_classification_agent"
+
 DEFAULT_TYPE_CKPT  = "models/tumor_classifier/type_ensemble_best.pth"
 DEFAULT_GRADE_CKPT = "models/tumor_classifier/grade_classifier_best.pth"
 
-AGENT_NAME = "tumor_classification_agent"
-
 
 # ---------------------------------------------------------------------------
-# Clinical urgency logic
+# Clinical urgency mapping
 # ---------------------------------------------------------------------------
-
-_URGENCY_MAP: Dict[tuple, str] = {
-    # (tumor_type, tumor_grade) -> urgency
-    ("glioma",      "grade_IV"):  "urgent",
-    ("glioma",      "grade_III"): "urgent",
-    ("glioma",      "grade_II"):  "monitor",
-    ("glioma",      None):        "monitor",   # grading unavailable
-    ("meningioma",  None):        "monitor",
-    ("pituitary",   None):        "routine",
-    ("notumor",     None):        "routine",
-}
-
 
 def _clinical_urgency(tumor_type: str, tumor_grade: Optional[str]) -> str:
-    """Derive clinical urgency from classification outputs.
+    """Map (tumor_type, tumor_grade) → clinical urgency string.
+
+    Rules:
+        urgent  → glioma grade_IV or glioma grade_III
+        monitor → glioma grade_II | meningioma | glioma (grade unavailable)
+        routine → notumor | pituitary | any unknown type
 
     Args:
-        tumor_type:  Stage-1 predicted class string.
-        tumor_grade: Stage-2 predicted class string, or None.
+        tumor_type:  Stage-1 prediction (e.g., "glioma").
+        tumor_grade: Stage-2 prediction or None.
 
     Returns:
         One of "urgent" | "monitor" | "routine".
     """
-    # Normalise grade key (grade classifiers are only run for glioma)
-    key = (tumor_type, tumor_grade)
-    if key in _URGENCY_MAP:
-        return _URGENCY_MAP[key]
-    # Fallback for unknown types
+    if tumor_type == "glioma":
+        if tumor_grade in ("grade_III", "grade_IV"):
+            return "urgent"
+        # grade_II, or grade unavailable
+        return "monitor"
+    if tumor_type == "meningioma":
+        return "monitor"
+    # notumor, pituitary, or unrecognised
     return "routine"
 
 
@@ -121,32 +122,26 @@ def _clinical_urgency(tumor_type: str, tumor_grade: Optional[str]) -> str:
 class TumorClassificationAgent:
     """Brain tumor type + glioma grade classification agent.
 
-    Uses a two-stage pipeline:
-        Stage 1 — EfficientNet-B4 + ResNet-50 + DenseNet-121 ensemble
-                   → tumor type (4 classes)
-        Stage 2 — EfficientNet-B4
-                   → glioma grade (3 classes), only when Stage 1 = glioma
-
-    Test-Time Augmentation (10 views) is applied at both stages by default.
+    Wraps a two-stage TumorPredictor behind the standard Orchestrator
+    ``.run(state)`` interface.  The TumorPredictor is instantiated lazily
+    on the first call to ``.run()`` so that import-time is fast even when
+    checkpoints are not yet present.
 
     Args:
-        type_ckpt_path:   Path to the Stage-1 ensemble checkpoint.
-        grade_ckpt_path:  Path to the Stage-2 grade checkpoint.
-        device:           Compute device.  Auto-detected if None.
+        type_ckpt_path:   Path to the Stage-1 ensemble checkpoint (.pth).
+        grade_ckpt_path:  Path to the Stage-2 grade classifier checkpoint (.pth).
+        device:           Compute device.  Auto-detected (CUDA if available).
         tta:              Enable Test-Time Augmentation (default True).
-        tta_n:            Number of TTA views (default 10).
-
-    Raises:
-        FileNotFoundError: If a checkpoint cannot be found during ``run()``.
+        tta_n:            Number of TTA augmented views (default 10).
     """
 
     def __init__(
         self,
-        type_ckpt_path:  str   = DEFAULT_TYPE_CKPT,
-        grade_ckpt_path: str   = DEFAULT_GRADE_CKPT,
+        type_ckpt_path:  str                    = DEFAULT_TYPE_CKPT,
+        grade_ckpt_path: str                    = DEFAULT_GRADE_CKPT,
         device:          Optional[torch.device] = None,
-        tta:             bool  = True,
-        tta_n:           int   = 10,
+        tta:             bool                   = True,
+        tta_n:           int                    = 10,
     ) -> None:
         if device is None:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -157,18 +152,17 @@ class TumorClassificationAgent:
         self.tta             = tta
         self.tta_n           = tta_n
 
-        # Predictor is instantiated lazily inside run() on first call
         self._predictor: Optional[TumorPredictor] = None
 
         print(
-            f"[TumorClassificationAgent] Initialised | "
-            f"device={device} | TTA={tta} (n={tta_n})"
+            f"[{AGENT_NAME}] Initialised | device={device} | "
+            f"TTA={tta} (n={tta_n})"
         )
 
-    # ── Lazy initialisation ──────────────────────────────────────────────────
+    # ── Lazy predictor ───────────────────────────────────────────────────────
 
     def _ensure_predictor(self) -> None:
-        """Instantiate TumorPredictor on first run() call (lazy init)."""
+        """Build TumorPredictor on first run() call."""
         if self._predictor is not None:
             return
         self._predictor = TumorPredictor(
@@ -185,57 +179,46 @@ class TumorClassificationAgent:
         """Run the Tumor Classification Agent on one MRI slice.
 
         Args:
-            state: Dictionary that MUST contain one of:
-                   - ``"mri_slice_path"``  (str | Path) — path to a 2-D MRI slice
-                   - ``"mri_slice_array"`` (np.ndarray) — H×W or H×W×C array
+            state: Dictionary containing input and optional context.
 
-                   Optionally may contain:
-                   - ``"vision_findings"`` (dict) — output from VisionAgent,
-                     used for context logging only.
+                Required (one of):
+                    "mri_slice_path"   (str | Path)  — path to 2-D MRI slice image
+                    "mri_slice_array"  (np.ndarray)  — H×W or H×W×C numpy array
+
+                Optional:
+                    "vision_findings"  (dict)  — VisionAgent output for logging
 
         Returns:
-            Standard Orchestrator result dict:
-            {
-                "agent_name":  "tumor_classification_agent",
-                "success":     True | False,
-                "confidence":  float,
-                "output": {
-                    "tumor_type":          str,
-                    "tumor_grade":         str | None,
-                    "type_probabilities":  dict[str, float],
-                    "grade_probabilities": dict[str, float] | None,
-                    "clinical_urgency":    str,
-                    "tta_used":            bool,
-                },
-                "error": None | str
-            }
+            Standard Orchestrator result dict (see module docstring).
         """
-        t_start = time.time()
-        print(f"[{AGENT_NAME}] run() called.")
+        t_start = time.perf_counter()
+        print(f"\n[{AGENT_NAME}] run() invoked.")
 
-        # ── Validate input ────────────────────────────────────────────────────
+        # ── Extract MRI source ────────────────────────────────────────────────
         mri_source: Optional[Union[str, np.ndarray]] = None
 
-        if "mri_slice_path" in state and state["mri_slice_path"] is not None:
+        if state.get("mri_slice_path") is not None:
             mri_source = str(state["mri_slice_path"])
-            print(f"[{AGENT_NAME}] Input: path = {mri_source}")
-        elif "mri_slice_array" in state and state["mri_slice_array"] is not None:
+            print(f"[{AGENT_NAME}] Input: path={mri_source}")
+
+        elif state.get("mri_slice_array") is not None:
             mri_source = state["mri_slice_array"]
-            print(
-                f"[{AGENT_NAME}] Input: numpy array shape = {mri_source.shape}"
-            )
+            shape = mri_source.shape if hasattr(mri_source, "shape") else "?"
+            print(f"[{AGENT_NAME}] Input: numpy array shape={shape}")
+
         else:
-            return self._error_result(
-                "State must contain 'mri_slice_path' or 'mri_slice_array'."
+            return self._fail(
+                "state must contain 'mri_slice_path' (str) or "
+                "'mri_slice_array' (np.ndarray)."
             )
 
-        # ── Log vision context ────────────────────────────────────────────────
-        vision_findings = state.get("vision_findings")
-        if vision_findings:
+        # ── Log VisionAgent context ───────────────────────────────────────────
+        vf = state.get("vision_findings")
+        if vf:
             print(
-                f"[{AGENT_NAME}] Vision context: "
-                f"tumour_detected={vision_findings.get('tumour_detected')}, "
-                f"confidence={vision_findings.get('confidence_score')}"
+                f"[{AGENT_NAME}] VisionAgent context: "
+                f"tumour_detected={vf.get('tumour_detected')} | "
+                f"confidence={vf.get('confidence_score')}"
             )
 
         # ── Run two-stage inference ───────────────────────────────────────────
@@ -243,16 +226,16 @@ class TumorClassificationAgent:
             self._ensure_predictor()
             pred = self._predictor.predict(mri_source)
         except FileNotFoundError as exc:
-            return self._error_result(str(exc))
+            return self._fail(str(exc))
         except Exception as exc:
             tb = traceback.format_exc()
-            print(f"[{AGENT_NAME}] ERROR during inference:\n{tb}")
-            return self._error_result(str(exc))
+            print(f"[{AGENT_NAME}] Unexpected error:\n{tb}")
+            return self._fail(str(exc))
 
         # ── Derive clinical urgency ───────────────────────────────────────────
         urgency = _clinical_urgency(pred["tumor_type"], pred["tumor_grade"])
+        elapsed = round(time.perf_counter() - t_start, 3)
 
-        elapsed = round(time.time() - t_start, 3)
         print(
             f"[{AGENT_NAME}] Done in {elapsed}s | "
             f"type={pred['tumor_type']} | grade={pred['tumor_grade']} | "
@@ -277,9 +260,9 @@ class TumorClassificationAgent:
     # ── Error helper ─────────────────────────────────────────────────────────
 
     @staticmethod
-    def _error_result(message: str) -> Dict[str, Any]:
-        """Return a standardised failure result dict."""
-        print(f"[{AGENT_NAME}] Error: {message}")
+    def _fail(message: str) -> Dict[str, Any]:
+        """Construct a standardised failure result."""
+        print(f"[{AGENT_NAME}] FAILED: {message}")
         return {
             "agent_name": AGENT_NAME,
             "success":    False,
@@ -295,15 +278,12 @@ class TumorClassificationAgent:
             "error": message,
         }
 
-    # ── Dunder helpers ────────────────────────────────────────────────────────
+    # ── Dunder ───────────────────────────────────────────────────────────────
 
     def __repr__(self) -> str:
-        loaded = self._predictor is not None
         return (
             f"TumorClassificationAgent("
             f"device={self.device}, "
-            f"type_ckpt='{Path(self.type_ckpt_path).name}', "
-            f"grade_ckpt='{Path(self.grade_ckpt_path).name}', "
-            f"predictor_loaded={loaded}, "
+            f"predictor_ready={self._predictor is not None}, "
             f"tta={self.tta})"
         )
