@@ -5,20 +5,23 @@ Defines the full multi-agent pipeline as a compiled LangGraph StateGraph.
 
 Graph topology:
 
-  ┌─────────────────────────────────────────────────────────────────────┐
+   ┌─────────────────────────────────────────────────────────────────────┐
   │                          START                                      │
   │                            │                                        │
   │                            ▼                                        │
   │                         vision          ← tumour detection first    │
   │                            │                                        │
   │                            ▼                                        │
-  │                         clinical        ← needs vision output       │
+  │                   tumor_classification  ← type + grade (NEW)        │
+  │                            │                                        │
+  │                            ▼                                        │
+  │                         clinical        ← needs vision+type output  │
   │                            │                                        │
   │                            ▼                                        │
   │                           rag           ← literature retrieval      │
   │                            │                                        │
   │                            ▼                                        │
-  │                         report          ← combines all three        │
+  │                         report          ← combines all              │
   │                            │                                        │
   │                       verification                                   │
   │                    ┌───────┴───────┐                                │
@@ -63,6 +66,7 @@ from orchestrator.nodes import (
     human_review_node,
     rag_node,
     report_node,
+    tumor_classification_node,
     verification_node,
     vision_node,
 )
@@ -80,6 +84,7 @@ logger = logging.getLogger(__name__)
 # If you rename a node, change it here and nowhere else.
 
 _NODE_VISION = "vision"
+_NODE_TUMOR_CLASSIFICATION = "tumor_classification"
 _NODE_CLINICAL = "clinical"
 _NODE_RAG = "rag"
 _NODE_REPORT = "report"
@@ -104,6 +109,7 @@ def build_graph() -> StateGraph:
 
     # ── Register nodes ─────────────────────────────────────────────────────────
     builder.add_node(_NODE_VISION, vision_node)
+    builder.add_node(_NODE_TUMOR_CLASSIFICATION, tumor_classification_node)
     builder.add_node(_NODE_CLINICAL, clinical_node)
     builder.add_node(_NODE_RAG, rag_node)
     builder.add_node(_NODE_REPORT, report_node)
@@ -111,11 +117,12 @@ def build_graph() -> StateGraph:
     builder.add_node(_NODE_EXPLAINABILITY, explainability_node)
     builder.add_node(_NODE_HUMAN_REVIEW, human_review_node)
 
-    # ── Edges: strictly sequential pipeline ───────────────────────────────────
-    # vision runs first — clinical needs its output to assess history fit,
-    # rag needs its detected label to query the right literature.
+    # ── Edges: strictly sequential pipeline ─────────────────────────────────────────
+    # vision first, then tumor classification (type+grade), then clinical
+    # (which now knows BOTH what was found AND what type it is).
     builder.add_edge(START, _NODE_VISION)
-    builder.add_edge(_NODE_VISION, _NODE_CLINICAL)
+    builder.add_edge(_NODE_VISION, _NODE_TUMOR_CLASSIFICATION)
+    builder.add_edge(_NODE_TUMOR_CLASSIFICATION, _NODE_CLINICAL)
     builder.add_edge(_NODE_CLINICAL, _NODE_RAG)
     builder.add_edge(_NODE_RAG, _NODE_REPORT)
 

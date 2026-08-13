@@ -12,7 +12,8 @@ Rules:
     importable even while individual agents are still being built.
 
 Integration checklist (Week 10–11):
-  [ ] VisionAgent          — agents/vision_agent/agent.py
+  [x] VisionAgent          — agents/vision_agent/agent.py
+  [x] TumorClassAgent      — agents/tumor_classification_agent/agent.py  ✅ DONE
   [ ] ClinicalHistoryAgent — agents/clinical_history_agent/agent.py
   [ ] RAGLiteratureAgent   — agents/rag_literature_agent/agent.py
   [ ] ReportAgent          — agents/report_generation_agent/agent.py
@@ -68,6 +69,39 @@ def vision_node(state: NeuroAgentState) -> dict[str, Any]:
         "[vision_node] Done | confidence=%.4f | label=%s",
         result.get("vision_findings", {}).get("confidence", -1),
         result.get("vision_findings", {}).get("prediction_label", "?"),
+    )
+    return result
+
+
+def tumor_classification_node(state: NeuroAgentState) -> dict[str, Any]:
+    """
+    Node: Tumor Classification Agent
+    Identifies tumor TYPE (glioma/meningioma/pituitary/no_tumor) using
+    EfficientNet-B4 + ResNet50 + DenseNet121 ensemble, then classifies
+    glioma GRADE (II/III/IV) with a second EfficientNet-B4.
+
+    Reads:  state["vision_findings"]  (for context)
+            state["mri_scan_path"]    (for 2D slice extraction)
+    Writes: state["tumor_classification_findings"]
+    """
+    logger.info("[tumor_classification_node] Starting TumorClassificationAgent")
+
+    try:
+        from agents.tumor_classification_agent.agent import TumorClassificationAgent  # noqa: PLC0415
+    except (ImportError, AttributeError) as exc:
+        raise _not_yet_implemented(
+            "TumorClassificationAgent",
+            "agents/tumor_classification_agent/agent.py",
+        ) from exc
+
+    agent = TumorClassificationAgent()
+    result = agent.run(dict(state))
+
+    logger.info(
+        "[tumor_classification_node] Done | type=%s | grade=%s | confidence=%.4f",
+        result.get("tumor_classification_findings", {}).get("tumor_type", "?"),
+        result.get("tumor_classification_findings", {}).get("tumor_grade", "N/A"),
+        result.get("tumor_classification_findings", {}).get("confidence", -1),
     )
     return result
 

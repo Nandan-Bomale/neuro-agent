@@ -8,6 +8,7 @@ The orchestrator (graph.py) merges each agent's output dict into this state.
 Field ownership:
   Orchestrator    → run_id, timestamp, pipeline_status, error_message
   Vision Agent    → vision_findings
+  Tumor Class.    → tumor_classification_findings
   Clinical Agent  → clinical_analysis
   RAG Agent       → literature_results
   Report Agent    → report, overall_confidence
@@ -91,6 +92,19 @@ class NeuroAgentState(TypedDict, total=False):
       - segmentation_mask_path: str  — path to saved binary mask image
       - prediction_label: str        — e.g. "tumour_detected" | "no_tumour"
       - model_version: str           — e.g. "unet-monai-v1"
+    """
+
+    # ── Tumor Classification Agent output ──────────────────────────────────────
+    tumor_classification_findings: dict[str, Any]
+    """
+    Output from TumorClassificationAgent.run(). Expected keys:
+      - tumor_type: str             — "glioma" | "meningioma" | "pituitary" | "no_tumor"
+      - tumor_grade: str | None     — "grade_II" | "grade_III" | "grade_IV" | None
+      - type_probabilities: dict    — {type: float} softmax probs from ensemble
+      - grade_probabilities: dict   — {grade: float} probs, empty if not glioma
+      - clinical_urgency: str       — "urgent" | "monitor" | "routine" | "normal"
+      - confidence: float           — geometric-mean confidence from TTA
+      - tta_used: bool              — True if Test-Time Augmentation was applied
     """
 
     # ── Clinical History Agent output ─────────────────────────────────────────
