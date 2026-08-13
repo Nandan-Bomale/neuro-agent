@@ -157,6 +157,38 @@ def _class_accuracy(
 # One-epoch training / validation helpers
 # ---------------------------------------------------------------------------
 
+
+def _freeze_backbone_bn(model: nn.Module) -> None:
+    """Keep ALL backbone BatchNorm layers in eval() mode during training.
+
+    Why this matters
+    ----------------
+    PyTorch's model.train() puts every module—including frozen backbone BN
+    layers—into training mode, which causes their running_mean / running_var
+    to be updated every mini-batch via an exponential moving average
+    (default momentum = 0.1).
+
+    With batch_size=16 and WeightedRandomSampler, each batch is a noisy
+    sample of the dataset.  After N epochs the running statistics end up as
+    a random walk around the true dataset statistics, oscillating by up to
+    ±0.3 in normalised units.  When model.eval() is called for validation
+    these corrupted statistics are used for normalisation → erratic val_loss
+    and val_acc swings of 0.33–0.60 between consecutive epochs.
+
+    Fix: keep backbone BN in eval() so running stats stay at their
+    pretrained ImageNet values throughout Phase 1.  In Phase 2 only BN
+    layers whose WEIGHT tensor has requires_grad=True are switched to
+    train() (they belong to the unfrozen portion of the backbone).
+
+    This is the same strategy used by Detectron2, MMDetection, and the
+    original EfficientDet training code for transfer learning.
+    """
+    for module in model.modules():
+        if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d)):
+            # If the BN weight is frozen, keep running stats frozen too
+            if module.weight is not None and not module.weight.requires_grad:
+                module.eval()
+
 def _train_epoch(
     model:       nn.Module,
     loader:      DataLoader,
@@ -177,6 +209,9 @@ def _train_epoch(
         (mean_loss, mean_accuracy) over all batches.
     """
     model.train()
+    # Freeze running stats of backbone BN layers that are still frozen.
+    # Prevents noisy 16-image batch stats from corrupting ImageNet running stats.
+    _freeze_backbone_bn(model)
     total_loss = total_acc = 0.0
     n_batches  = 0
 
