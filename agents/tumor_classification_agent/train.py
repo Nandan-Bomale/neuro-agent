@@ -70,7 +70,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 
@@ -183,7 +183,7 @@ def _train_epoch(
 
         optimizer.zero_grad(set_to_none=True)
 
-        with autocast():
+        with autocast("cuda"):
             if is_ensemble:
                 assert isinstance(model, TumorTypeEnsemble)
                 eff_l, res_l, den_l = model.individual_logits(images)
@@ -236,7 +236,7 @@ def _val_epoch(
         images = images.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
 
-        with autocast():
+        with autocast("cuda"):
             if is_ensemble:
                 assert isinstance(model, TumorTypeEnsemble)
                 eff_l, res_l, den_l = model.individual_logits(images)
@@ -377,7 +377,7 @@ def train(
     print(f"[train] batch_size={bs} | train_batches={len(train_loader)} | val_batches={len(val_loader)}\n")
 
     criterion = LabelSmoothingCE(smoothing=smoothing)
-    scaler    = GradScaler()
+    scaler    = GradScaler("cuda")
     best_val_acc   = 0.0
     best_ckpt_path = save_path / f"{prefix}_best.pth"
 
