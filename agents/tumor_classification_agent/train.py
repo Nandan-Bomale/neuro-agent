@@ -159,35 +159,30 @@ def _class_accuracy(
 
 
 def _freeze_backbone_bn(model: nn.Module) -> None:
-    """Keep ALL backbone BatchNorm layers in eval() mode during training.
+    """Stabilise ALL backbone BatchNorm layers during training.
 
-    Why this matters
-    ----------------
-    PyTorch's model.train() puts every module—including frozen backbone BN
-    layers—into training mode, which causes their running_mean / running_var
-    to be updated every mini-batch via an exponential moving average
-    (default momentum = 0.1).
+    Two behaviours depending on whether the BN layer is frozen or unfrozen:
 
-    With batch_size=16 and WeightedRandomSampler, each batch is a noisy
-    sample of the dataset.  After N epochs the running statistics end up as
-    a random walk around the true dataset statistics, oscillating by up to
-    ±0.3 in normalised units.  When model.eval() is called for validation
-    these corrupted statistics are used for normalisation → erratic val_loss
-    and val_acc swings of 0.33–0.60 between consecutive epochs.
+    Frozen BN (weight.requires_grad=False)
+        Keep in eval() mode entirely — running stats stay at ImageNet values.
+        Same strategy as Phase 1.
 
-    Fix: keep backbone BN in eval() so running stats stay at their
-    pretrained ImageNet values throughout Phase 1.  In Phase 2 only BN
-    layers whose WEIGHT tensor has requires_grad=True are switched to
-    train() (they belong to the unfrozen portion of the backbone).
-
-    This is the same strategy used by Detectron2, MMDetection, and the
-    original EfficientDet training code for transfer learning.
+    Unfrozen BN (weight.requires_grad=True, i.e. inside the fine-tuned blocks)
+        Remain in train() mode so the BN CAN adapt to MRI data, BUT reduce
+        momentum from 0.1 to 0.01.  With batch_size=16 and the default
+        momentum=0.1 the running stats drift by up to ±0.3 per epoch
+        (random walk from noisy mini-batches) causing the pituitary/glioma
+        oscillation seen in Phase 2 fine-tuning.  Momentum=0.01 gives a
+        10× slower EMA: statistics stabilise over ~100 batches instead of ~10.
     """
     for module in model.modules():
         if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d)):
-            # If the BN weight is frozen, keep running stats frozen too
             if module.weight is not None and not module.weight.requires_grad:
+                # Fully frozen backbone layer — lock running stats
                 module.eval()
+            else:
+                # Unfrozen layer — allow adaptation but slow the EMA
+                module.momentum = 0.01
 
 def _train_epoch(
     model:       nn.Module,
@@ -197,20 +192,27 @@ def _train_epoch(
     device:      torch.device,
     scaler:      GradScaler,
     is_ensemble: bool,
+    mixup_alpha: float = 0.0,
 ) -> Tuple[float, float]:
     """Run one full training epoch.
 
     Ensemble loss uses AVERAGED LOGITS (not sum of individual CE losses).
     Averaging logits before CE forces all three backbones to cooperate:
     none can minimise loss alone by predicting the easy 'notumor' class.
-    Gradient flows equally through each backbone via the 1/3 scaling.
+
+    When mixup_alpha > 0, Mixup augmentation is applied to 50% of batches.
+    Mixup smooths the glioma/meningioma decision boundary by creating convex
+    combinations of training pairs — the primary reason glioma accuracy is
+    stuck at 80-83% without it.
 
     Returns:
         (mean_loss, mean_accuracy) over all batches.
     """
+    import random
+    import numpy as np
+
     model.train()
-    # Freeze running stats of backbone BN layers that are still frozen.
-    # Prevents noisy 16-image batch stats from corrupting ImageNet running stats.
+    # Stabilise BN: freeze fully-frozen layers; slow momentum on unfrozen ones.
     _freeze_backbone_bn(model)
     total_loss = total_acc = 0.0
     n_batches  = 0
@@ -219,22 +221,34 @@ def _train_epoch(
         images = images.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
 
+        # ── Mixup (applied to 50% of batches when alpha > 0) ──────────────
+        use_mixup = mixup_alpha > 0 and random.random() < 0.5
+        if use_mixup:
+            lam  = float(np.random.beta(mixup_alpha, mixup_alpha))
+            idx  = torch.randperm(images.size(0), device=device)
+            images = lam * images + (1.0 - lam) * images[idx]
+            labels_b = labels[idx]
+
         optimizer.zero_grad(set_to_none=True)
 
         with autocast("cuda"):
             if is_ensemble:
                 assert isinstance(model, TumorTypeEnsemble)
                 eff_l, res_l, den_l = model.individual_logits(images)
-                # Single CE on averaged logits — forces backbone cooperation
                 avg_l = (eff_l + res_l + den_l) / 3.0
-                loss  = criterion(avg_l, labels)
+                if use_mixup:
+                    loss = lam * criterion(avg_l, labels) + (1.0 - lam) * criterion(avg_l, labels_b)
+                else:
+                    loss = criterion(avg_l, labels)
                 with torch.no_grad():
-                    # Accuracy from averaged softmax (inference behaviour)
                     probs = model(images)
             else:
                 logits = model(images)
-                loss   = criterion(logits, labels)
-                probs  = F.softmax(logits.detach(), dim=1)
+                if use_mixup:
+                    loss = lam * criterion(logits, labels) + (1.0 - lam) * criterion(logits, labels_b)
+                else:
+                    loss = criterion(logits, labels)
+                probs = F.softmax(logits.detach(), dim=1)
 
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
@@ -355,6 +369,7 @@ def train(
     smoothing:    float          = 0.1,
     brats_path:   Optional[str]  = None,
     resume_from:  Optional[str]  = None,
+    mixup_alpha:  float          = 0.0,
 ) -> None:
     """Full two-phase training run for one stage.
 
@@ -375,6 +390,8 @@ def train(
         resume_from:  Path to a saved .pth checkpoint.  When set, Phase 1 is
                       skipped and Phase 2 runs for ``epochs`` more epochs
                       starting from the loaded weights.
+        mixup_alpha:  Beta distribution alpha for Mixup augmentation (0=off).
+                      Recommended: 0.4 for small medical datasets.
     """
     assert stage in ("type", "grade"), f"--stage must be 'type' or 'grade', got '{stage}'"
 
@@ -466,7 +483,8 @@ def train(
         for epoch in range(1, phase1_eps + 1):
             t0 = time.time()
             tr_loss, tr_acc = _train_epoch(
-                model, train_loader, criterion, optimizer, device, scaler, is_ensemble
+                model, train_loader, criterion, optimizer, device, scaler,
+                is_ensemble, mixup_alpha=0.0,   # no mixup in Phase 1 — let heads converge first
             )
             vl_loss, vl_acc, vl_per_cls = _val_epoch(
                 model, val_loader, criterion, device, is_ensemble, num_classes
@@ -540,7 +558,8 @@ def train(
         for epoch in range(start_ep, end_ep + 1):
             t0 = time.time()
             tr_loss, tr_acc = _train_epoch(
-                model, train_loader, criterion, optimizer, device, scaler, is_ensemble
+                model, train_loader, criterion, optimizer, device, scaler,
+                is_ensemble, mixup_alpha=mixup_alpha,
             )
             vl_loss, vl_acc, vl_per_cls = _val_epoch(
                 model, val_loader, criterion, device, is_ensemble, num_classes
@@ -657,6 +676,13 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--mixup", type=float, default=0.4, metavar="ALPHA",
+        help=(
+            "Mixup Beta distribution alpha for Phase 2 augmentation. "
+            "0 = disabled. 0.4 = recommended for small medical datasets. Default: 0.4."
+        ),
+    )
+    p.add_argument(
         "--label-smoothing", type=float, default=0.1,
         help="Label smoothing eps (0=standard CE, 0.1=default).",
     )
@@ -677,4 +703,5 @@ if __name__ == "__main__":
         smoothing    = args.label_smoothing,
         brats_path   = args.brats_path,
         resume_from  = args.resume,
+        mixup_alpha  = args.mixup,
     )
