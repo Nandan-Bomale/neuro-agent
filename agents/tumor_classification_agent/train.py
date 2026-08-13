@@ -360,6 +360,7 @@ def train(
             batch_size=bs,
             num_workers=num_workers,
             seed=seed,
+            val_split=0.0,   # use ALL 5600 Training/ images; Testing/ is our val set
         )
         # Use the official Testing/ split as validation — not a random carve from
         # Training/.  This gives 5600 training images (vs 4760) and a proper
