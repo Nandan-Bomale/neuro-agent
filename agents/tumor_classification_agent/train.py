@@ -344,31 +344,37 @@ def _save_checkpoint(
 # ---------------------------------------------------------------------------
 
 def train(
-    stage:       str,
-    data_path:   str,
-    epochs:      int            = 40,
-    save_dir:    str            = "models/tumor_classifier/",
-    batch_size:  Optional[int]  = None,
-    lr:          float          = 1e-3,
-    num_workers: int            = 4,
-    seed:        int            = 42,
-    smoothing:   float          = 0.1,
-    brats_path:  Optional[str]  = None,
+    stage:        str,
+    data_path:    str,
+    epochs:       int            = 40,
+    save_dir:     str            = "models/tumor_classifier/",
+    batch_size:   Optional[int]  = None,
+    lr:           float          = 1e-3,
+    num_workers:  int            = 4,
+    seed:         int            = 42,
+    smoothing:    float          = 0.1,
+    brats_path:   Optional[str]  = None,
+    resume_from:  Optional[str]  = None,
 ) -> None:
     """Full two-phase training run for one stage.
 
     Args:
-        stage:       "type" (Stage 1) or "grade" (Stage 2).
-        data_path:   For type: path to type/ root (Training/ + Testing/).
-                     For grade: path to grade/ root (kaggle_3m/).
-        epochs:      Total epochs (Phase 1 = PHASE1_EPOCHS, Phase 2 = rest).
-        save_dir:    Directory where checkpoints are saved.
-        batch_size:  Mini-batch size; auto-selected if None (16 type, 8 grade).
-        lr:          Phase-1 initial learning rate.
-        num_workers: DataLoader worker count.
-        seed:        Random seed.
-        smoothing:   Label-smoothing factor.
-        brats_path:  (Grade stage only) path to BraTS data root.
+        stage:        "type" (Stage 1) or "grade" (Stage 2).
+        data_path:    For type: path to type/ root (Training/ + Testing/).
+                      For grade: path to grade/ root (kaggle_3m/).
+        epochs:       Total epochs for a fresh run OR Phase-2 extra epochs
+                      when --resume is set.
+        save_dir:     Directory where checkpoints are saved.
+        batch_size:   Mini-batch size; auto-selected if None (16 type, 8 grade).
+        lr:           Phase-1 initial LR (fresh run) or Phase-2 backbone LR
+                      base when resuming (actual LR = lr * PHASE2_LR_SCALE).
+        num_workers:  DataLoader worker count.
+        seed:         Random seed.
+        smoothing:    Label-smoothing factor.
+        brats_path:   (Grade stage only) path to BraTS data root.
+        resume_from:  Path to a saved .pth checkpoint.  When set, Phase 1 is
+                      skipped and Phase 2 runs for ``epochs`` more epochs
+                      starting from the loaded weights.
     """
     assert stage in ("type", "grade"), f"--stage must be 'type' or 'grade', got '{stage}'"
 
@@ -430,54 +436,68 @@ def train(
     best_val_acc   = 0.0
     best_ckpt_path = save_path / f"{prefix}_best.pth"
 
+    # ── Optional: resume from checkpoint ────────────────────────────────────
+    if resume_from is not None:
+        ckpt = torch.load(resume_from, map_location=device)
+        model.load_state_dict(ckpt["model_state"])
+        best_val_acc = ckpt.get("val_accuracy", 0.0)
+        print(f"[resume] Loaded weights from '{resume_from}'")
+        print(f"[resume] Resuming from val_acc={best_val_acc:.4f}  — skipping Phase 1")
+        print(f"[resume] Running {epochs} more Phase-2 epochs\n")
+
     # ── PHASE 1 — frozen backbone ────────────────────────────────────────────
     phase1_eps = min(PHASE1_EPOCHS, epochs)
-    model.set_phase(1)
-    optimizer = optim.AdamW(
-        filter(lambda p: p.requires_grad, model.parameters()),
-        lr=lr, weight_decay=1e-4,
-    )
-    scheduler = CosineAnnealingLR(optimizer, T_max=phase1_eps, eta_min=lr * 1e-3)
-
-    print(f"\n{'─'*65}")
-    print(f"  PHASE 1  |  Frozen backbone  |  {phase1_eps} epochs  |  LR={lr:.0e}")
-    print(f"{'─'*65}")
-
-    for epoch in range(1, phase1_eps + 1):
-        t0 = time.time()
-        tr_loss, tr_acc = _train_epoch(
-            model, train_loader, criterion, optimizer, device, scaler, is_ensemble
+    if resume_from is not None:
+        # Skip Phase 1 entirely when resuming
+        phase1_eps = 0
+    else:
+        model.set_phase(1)
+        optimizer = optim.AdamW(
+            filter(lambda p: p.requires_grad, model.parameters()),
+            lr=lr, weight_decay=1e-4,
         )
-        vl_loss, vl_acc, vl_per_cls = _val_epoch(
-            model, val_loader, criterion, device, is_ensemble, num_classes
-        )
-        scheduler.step()
-        elapsed = time.time() - t0
+        scheduler = CosineAnnealingLR(optimizer, T_max=phase1_eps, eta_min=lr * 1e-3)
 
-        per_cls_str = "  ".join(
-            f"{class_names[c]}={vl_per_cls[c]:.3f}"
-            for c in sorted(vl_per_cls)
-        )
-        print(
-            f"  Ep {epoch:3d}/{phase1_eps} │ "
-            f"tr_loss={tr_loss:.4f} tr_acc={tr_acc:.4f} │ "
-            f"val_loss={vl_loss:.4f} val_acc={vl_acc:.4f} │ "
-            f"{elapsed:.1f}s"
-        )
-        print(f"           per-class: {per_cls_str}")
+        _SEP = "─" * 65
+        print("\n" + _SEP)
+        print(f"  PHASE 1  |  Frozen backbone  |  {phase1_eps} epochs  |  LR={lr:.0e}")
+        print(_SEP)
 
-        if vl_acc > best_val_acc:
-            best_val_acc = vl_acc
-            _save_checkpoint(
-                model, optimizer, epoch,
-                vl_acc, vl_loss, class_names,
-                best_ckpt_path,
-                extra={"phase": 1},
+        for epoch in range(1, phase1_eps + 1):
+            t0 = time.time()
+            tr_loss, tr_acc = _train_epoch(
+                model, train_loader, criterion, optimizer, device, scaler, is_ensemble
             )
+            vl_loss, vl_acc, vl_per_cls = _val_epoch(
+                model, val_loader, criterion, device, is_ensemble, num_classes
+            )
+            scheduler.step()
+            elapsed = time.time() - t0
+
+            per_cls_str = "  ".join(
+                f"{class_names[c]}={vl_per_cls[c]:.3f}"
+                for c in sorted(vl_per_cls)
+            )
+            print(
+                f"  Ep {epoch:3d}/{phase1_eps} \u2502 "
+                f"tr_loss={tr_loss:.4f} tr_acc={tr_acc:.4f} \u2502 "
+                f"val_loss={vl_loss:.4f} val_acc={vl_acc:.4f} \u2502 "
+                f"{elapsed:.1f}s"
+            )
+            print(f"           per-class: {per_cls_str}")
+
+            if vl_acc > best_val_acc:
+                best_val_acc = vl_acc
+                _save_checkpoint(
+                    model, optimizer, epoch,
+                    vl_acc, vl_loss, class_names,
+                    best_ckpt_path,
+                    extra={"phase": 1},
+                )
 
     # ── PHASE 2 — partial unfreeze ───────────────────────────────────────────
-    if epochs > phase1_eps:
-        phase2_eps = epochs - phase1_eps
+    phase2_eps = epochs if resume_from is not None else (epochs - phase1_eps)
+    if phase2_eps > 0:
         phase2_lr  = lr * PHASE2_LR_SCALE
 
         model.set_phase(2, n_unfreeze=N_UNFREEZE)
@@ -504,13 +524,20 @@ def train(
                 filter(lambda p: p.requires_grad, model.parameters()),
                 lr=phase2_lr, weight_decay=1e-4,
             )
-        scheduler = CosineAnnealingLR(optimizer, T_max=phase2_eps, eta_min=phase2_lr * 1e-2)
+        scheduler = CosineAnnealingLR(
+            optimizer, T_max=phase2_eps,
+            eta_min=phase2_lr * 1e-2,   # floor at 5e-7; avoids LR starvation
+        )
 
         print(f"\n{'─'*65}")
-        print(f"  PHASE 2  |  Last {N_UNFREEZE} layers unfrozen  |  {phase2_eps} epochs  |  LR={phase2_lr:.0e}")
+        label = f"RESUMED from {Path(resume_from).name}" if resume_from else f"Last {N_UNFREEZE} layers unfrozen"
+        print(f"  PHASE 2  |  {label}  |  {phase2_eps} epochs  |  backbone LR={phase2_lr:.0e}")
         print(f"{'─'*65}")
 
-        for epoch in range(phase1_eps + 1, epochs + 1):
+        start_ep = 1
+        end_ep   = phase2_eps
+
+        for epoch in range(start_ep, end_ep + 1):
             t0 = time.time()
             tr_loss, tr_acc = _train_epoch(
                 model, train_loader, criterion, optimizer, device, scaler, is_ensemble
@@ -526,9 +553,9 @@ def train(
                 for c in sorted(vl_per_cls)
             )
             print(
-                f"  Ep {epoch:3d}/{epochs} │ "
-                f"tr_loss={tr_loss:.4f} tr_acc={tr_acc:.4f} │ "
-                f"val_loss={vl_loss:.4f} val_acc={vl_acc:.4f} │ "
+                f"  Ep {epoch:3d}/{end_ep} \u2502 "
+                f"tr_loss={tr_loss:.4f} tr_acc={tr_acc:.4f} \u2502 "
+                f"val_loss={vl_loss:.4f} val_acc={vl_acc:.4f} \u2502 "
                 f"{elapsed:.1f}s"
             )
             print(f"           per-class: {per_cls_str}")
@@ -621,6 +648,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Random seed. Default: 42.",
     )
     p.add_argument(
+        "--resume", default=None, metavar="CHECKPOINT",
+        help=(
+            "Path to a .pth checkpoint to resume from. "
+            "Loads model weights, skips Phase 1, and runs Phase 2 for "
+            "--epochs more epochs at LR = --lr * PHASE2_LR_SCALE. "
+            "Example: --resume models/tumor_classifier/type_ensemble_best.pth"
+        ),
+    )
+    p.add_argument(
         "--label-smoothing", type=float, default=0.1,
         help="Label smoothing eps (0=standard CE, 0.1=default).",
     )
@@ -630,14 +666,15 @@ def _build_parser() -> argparse.ArgumentParser:
 if __name__ == "__main__":
     args = _build_parser().parse_args()
     train(
-        stage       = args.stage,
-        data_path   = args.data_path,
-        epochs      = args.epochs,
-        save_dir    = args.save_dir,
-        batch_size  = args.batch_size,
-        lr          = args.lr,
-        num_workers = args.num_workers,
-        seed        = args.seed,
-        smoothing   = args.label_smoothing,
-        brats_path  = args.brats_path,
+        stage        = args.stage,
+        data_path    = args.data_path,
+        epochs       = args.epochs,
+        save_dir     = args.save_dir,
+        batch_size   = args.batch_size,
+        lr           = args.lr,
+        num_workers  = args.num_workers,
+        seed         = args.seed,
+        smoothing    = args.label_smoothing,
+        brats_path   = args.brats_path,
+        resume_from  = args.resume,
     )
