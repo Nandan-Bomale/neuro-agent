@@ -54,7 +54,7 @@ from agents.tumor_classification_agent.model import (
 # Default class names (fallback if no metadata JSON is found)
 # ---------------------------------------------------------------------------
 
-DEFAULT_TYPE_CLASSES  = ["glioma", "meningioma", "no_tumor", "pituitary"]
+DEFAULT_TYPE_CLASSES  = ["glioma", "meningioma", "notumor", "pituitary"]
 DEFAULT_GRADE_CLASSES = ["grade_II", "grade_III", "grade_IV"]
 
 TTA_N = 10  # number of TTA augmented views

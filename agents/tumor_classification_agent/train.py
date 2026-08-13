@@ -16,6 +16,7 @@ python -m agents.tumor_classification_agent.train \
 python -m agents.tumor_classification_agent.train \
     --stage grade \
     --data-path data/tumor_classification/grade/ \
+    --brats-path data/raw/BraTS2020_TrainingData/ \
     --epochs 40 \
     --save-dir models/tumor_classifier/
 
@@ -246,6 +247,7 @@ def train(
     num_workers: int      = 4,
     seed:        int      = 42,
     smoothing:   float    = 0.1,
+    brats_path:  Optional[str] = None,
 ) -> None:
     """Full training run for one stage.
 
@@ -272,7 +274,8 @@ def train(
     if stage == "type":
         default_bs = 16
         bs = batch_size or default_bs
-        train_loader, val_loader, class_names = get_type_dataloaders(
+        # get_type_dataloaders returns (train, val, test, class_names)
+        train_loader, val_loader, _test_loader, class_names = get_type_dataloaders(
             data_path, batch_size=bs, num_workers=num_workers, seed=seed
         )
         model       = build_type_ensemble(num_classes=len(class_names), device=device)
@@ -280,10 +283,20 @@ def train(
         prefix      = "type_ensemble"
 
     else:  # grade
+        if brats_path is None:
+            raise ValueError(
+                "--brats-path is required for --stage grade. "
+                "Example: --brats-path data/raw/BraTS2020_TrainingData/"
+            )
         default_bs = 8
         bs = batch_size or default_bs
+        # get_grade_dataloaders returns (train, val, class_names)
         train_loader, val_loader, class_names = get_grade_dataloaders(
-            data_path, batch_size=bs, num_workers=num_workers, seed=seed
+            grade_root=data_path,
+            brats_root=brats_path,
+            batch_size=bs,
+            num_workers=num_workers,
+            seed=seed,
         )
         model       = build_grade_classifier(num_classes=len(class_names), device=device)
         is_ensemble = False
@@ -406,7 +419,21 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--data-path",
         required=True,
-        help="Path to dataset root (ImageFolder layout).",
+        help=(
+            "Stage 'type': path to data/tumor_classification/type/ "
+            "(contains Training/ and Testing/ sub-folders). "
+            "Stage 'grade': path to data/tumor_classification/grade/ "
+            "(contains kaggle_3m/ sub-folder)."
+        ),
+    )
+    p.add_argument(
+        "--brats-path",
+        default=None,
+        help=(
+            "(Grade stage only) Path to data/raw/BraTS2020_TrainingData/. "
+            "Must contain MICCAI_BraTS2020_TrainingData/ with name_mapping.csv "
+            "and per-patient NIfTI folders. Required when --stage grade."
+        ),
     )
     p.add_argument(
         "--epochs",
@@ -455,13 +482,14 @@ def _parse_args() -> argparse.Namespace:
 if __name__ == "__main__":
     args = _parse_args()
     train(
-        stage      = args.stage,
-        data_path  = args.data_path,
-        epochs     = args.epochs,
-        save_dir   = args.save_dir,
-        batch_size = args.batch_size,
-        lr         = args.lr,
+        stage       = args.stage,
+        data_path   = args.data_path,
+        epochs      = args.epochs,
+        save_dir    = args.save_dir,
+        batch_size  = args.batch_size,
+        lr          = args.lr,
         num_workers = args.num_workers,
         seed        = args.seed,
         smoothing   = args.label_smoothing,
+        brats_path  = args.brats_path,
     )

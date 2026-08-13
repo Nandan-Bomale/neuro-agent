@@ -92,7 +92,7 @@ _URGENCY_MAP: Dict[tuple, str] = {
     ("glioma",      None):        "monitor",   # grading unavailable
     ("meningioma",  None):        "monitor",
     ("pituitary",   None):        "routine",
-    ("no_tumor",    None):        "routine",
+    ("notumor",     None):        "routine",
 }
 
 
