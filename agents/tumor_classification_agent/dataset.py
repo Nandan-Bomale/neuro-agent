@@ -15,40 +15,40 @@ Stage 1 — Tumor Type
 Stage 2 — Glioma Grade
     grade_II source:
         data/tumor_classification/grade/kaggle_3m/
-            <TCGA_patient_id>/  *.tif (MRI slices, 256×256 RGB)
-                                *_mask.tif  (excluded — only non-mask slices used)
+            <TCGA_patient_id>/  *.tif (MRI slices, 256x256 RGB)
+                                *_mask.tif  (excluded -- only non-mask slices used)
         110 patient folders, ~20 slices each.
 
-    grade_III source:
-        data/raw/BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData/
-        Patients labelled LGG in name_mapping.csv (76 patients)
-        Files: BraTS20_Training_XXX_flair.nii  (240×240×155 volume)
+    grade_III / grade_IV source (BraTS 2020 -- H5 format):
+        data/raw/BraTS2020_training_data/content/data/
+            volume_N_slice_S.h5   (one file per 2-D slice)
+        Each H5 file contains:
+            image: (240, 240, 4) -- 4 MRI modalities (FLAIR, T1, T1ce, T2)
+            mask:  (240, 240, 3) -- ch0=NCR/NET, ch1=Edema, ch2=ET (Enhancing Tumour)
+        Total: 369 volumes x ~100 slices ~36,900 H5 files.
 
-    grade_IV source:
-        Same BraTS folder, patients labelled HGG in name_mapping.csv (293 patients)
-        Files: BraTS20_Training_XXX_flair.nii
+    Grade labeling (derived at dataset init from ET pixel count per volume):
+        et_total = sum of mask channel-2 pixels across ALL slices of a volume
+        Grade II   : et_total <    50  (matches LGG kaggle_3m patients)
+        Grade III  : 50 <= et_total < 3000  (anaplastic glioma)
+        Grade IV   : et_total >= 3000  (GBM -- majority of HGG volumes)
 
-Grade labels are derived at runtime from:
-    • kaggle_3m folder   → grade_II
-    • BraTS name_mapping.csv Grade column → LGG = grade_III, HGG = grade_IV
-
-MRI slice strategy for NIfTI volumes (Grade III / IV):
-    • Load FLAIR volume (240×240×155 axial slices)
-    • Keep slices 40–120 (tumour-bearing band, skip blank brain-edge slices)
-    • Skip slices where max pixel value < 10 % of volume max (near-empty slices)
-    • Normalise each slice to [0, 255] uint8 before PIL conversion
+    Slice-level preprocessing:
+        Use T1ce channel (image[:, :, 2]) -- best contrast for tumor boundary.
+        Normalise to [0, 1] float32, repeat channel x 3 -> (3, H, W) RGB-like.
+        Skip slices where ALL mask channels sum < 10 (background / no-tumour).
 
 Both datasets:
-    • Grayscale / single-channel → 3-channel RGB by PIL.convert("RGB").
-    • Full augmentation pipeline for training.
-    • Only resize + normalise for validation / inference.
-    • WeightedRandomSampler used to handle class imbalance.
+    Full augmentation pipeline for training.
+    Only resize + normalise for validation / inference.
+    WeightedRandomSampler used to handle class imbalance.
 """
 
 from __future__ import annotations
 
 import os
 import warnings
+from collections import defaultdict
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -74,15 +74,16 @@ IMAGE_SIZE    = 224          # input resolution for all backbones
 TYPE_CLASSES  = ["glioma", "meningioma", "notumor", "pituitary"]
 GRADE_CLASSES = ["grade_II", "grade_III", "grade_IV"]
 
-# BraTS slice window: keep axial slices in [SLICE_LOW, SLICE_HIGH)
-BRATS_SLICE_LOW  = 40
-BRATS_SLICE_HIGH = 120
-# Skip slices whose max intensity is below this fraction of the volume max
-BRATS_MIN_INTENSITY_FRAC = 0.10
+# BraTS H5 grade thresholds (ET pixel count across all slices of a volume)
+BRATS_ET_GRADE_II_MAX  =    50    # et_total < 50  -> grade_II
+BRATS_ET_GRADE_III_MAX =  3000    # 50 <= et_total < 3000 -> grade_III
+                                   # et_total >= 3000 -> grade_IV
 
-# BraTS paths (relative to repo root or absolute)
-BRATS_TRAIN_DIR    = "data/raw/BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData"
-BRATS_NAME_MAPPING = "name_mapping.csv"
+# Minimum mask pixel sum to keep a slice (skip pure background)
+BRATS_MIN_MASK_SUM = 10
+
+# T1ce channel index inside the H5 image array (shape 240,240,4)
+BRATS_T1CE_CHANNEL = 2
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +91,7 @@ BRATS_NAME_MAPPING = "name_mapping.csv"
 # ---------------------------------------------------------------------------
 
 class EnsureRGB:
-    """Convert any PIL mode to RGB (handles L, RGBA, I, F, P…).
+    """Convert any PIL mode to RGB (handles L, RGBA, I, F, P...).
 
     Placed first in every transform pipeline so all downstream ops receive
     a 3-channel tensor.

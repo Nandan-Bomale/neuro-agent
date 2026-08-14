@@ -367,7 +367,7 @@ def train(
     num_workers:  int            = 4,
     seed:         int            = 42,
     smoothing:    float          = 0.1,
-    brats_path:   Optional[str]  = None,
+    brats_h5_dir: Optional[str]  = None,
     resume_from:  Optional[str]  = None,
     mixup_alpha:  float          = 0.0,
 ) -> None:
@@ -386,7 +386,9 @@ def train(
         num_workers:  DataLoader worker count.
         seed:         Random seed.
         smoothing:    Label-smoothing factor.
-        brats_path:   (Grade stage only) path to BraTS data root.
+        brats_h5_dir: (Grade stage only) path to BraTS H5 directory
+                      (contains volume_N_slice_S.h5 files).
+                      e.g. data/raw/BraTS2020_training_data/content/data/
         resume_from:  Path to a saved .pth checkpoint.  When set, Phase 1 is
                       skipped and Phase 2 runs for ``epochs`` more epochs
                       starting from the loaded weights.
@@ -427,15 +429,15 @@ def train(
         prefix      = "type_ensemble"
 
     else:  # grade
-        if brats_path is None:
+        if brats_h5_dir is None:
             raise ValueError(
                 "--brats-path is required for --stage grade.\n"
-                "Example: --brats-path data/raw/BraTS2020_TrainingData/"
+                "Example: --brats-path data/raw/BraTS2020_training_data/content/data/"
             )
         bs = batch_size or 8
         train_loader, val_loader, class_names = get_grade_dataloaders(
-            grade_root=data_path,
-            brats_root=brats_path,
+            data_path=data_path,
+            brats_h5_dir=brats_h5_dir,
             batch_size=bs,
             num_workers=num_workers,
             seed=seed,
@@ -636,9 +638,11 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
-        "--brats-path", default=None,
+        "--brats-path", default=None, dest="brats_h5_dir",
         help=(
-            "[Grade stage only] Path to data/raw/BraTS2020_TrainingData/. "
+            "[Grade stage only] Path to BraTS H5 directory containing "
+            "volume_N_slice_S.h5 files. "
+            "e.g. data/raw/BraTS2020_training_data/content/data/ "
             "Required when --stage grade."
         ),
     )
@@ -701,7 +705,7 @@ if __name__ == "__main__":
         num_workers  = args.num_workers,
         seed         = args.seed,
         smoothing    = args.label_smoothing,
-        brats_path   = args.brats_path,
+        brats_h5_dir = args.brats_h5_dir,
         resume_from  = args.resume,
         mixup_alpha  = args.mixup,
     )

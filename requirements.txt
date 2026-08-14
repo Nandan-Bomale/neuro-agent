@@ -5,7 +5,8 @@
 torch>=2.1.0
 torchvision>=0.16.0
 monai>=1.3.0
-nibabel>=5.1.0           # NIfTI file reading (BraTS format)
+h5py>=3.9.0             # BraTS H5 slice reading (replaces NIfTI)
+# nibabel>=5.1.0        # NIfTI — no longer needed (BraTS data is H5)
 opencv-python>=4.8.0
 Pillow>=10.0.0
 scikit-image>=0.21.0
