@@ -17,6 +17,10 @@ import json
 import sys
 from pathlib import Path
 
+# Ensure the repo root (parent of scripts/) is on the path so that
+# `agents.*` imports work when running `python scripts/verify_training.py`
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import torch
 
 SAVE_DIR = Path("models/tumor_classifier")
@@ -31,9 +35,9 @@ TARGET_GRADE_ACC = 0.85   # flag if below this (target 90%+)
 
 
 def _load_and_check(ckpt_path: Path, meta_path: Path, target_acc: float, label: str) -> bool:
-    print(f"\n{'─'*55}")
+    print(f"\n{'-'*55}")
     print(f"  Checking: {label}")
-    print(f"{'─'*55}")
+    print(f"{'-'*55}")
 
     ok = True
 
@@ -99,7 +103,6 @@ def _load_and_check(ckpt_path: Path, meta_path: Path, target_acc: float, label: 
         model.eval()
 
         # Quick forward pass
-        import torch
         x = torch.randn(1, 3, 224, 224)
         with torch.no_grad():
             out = model(x)
