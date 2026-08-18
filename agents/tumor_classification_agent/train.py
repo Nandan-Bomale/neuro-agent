@@ -410,7 +410,7 @@ def train(
 
     # ── Build DataLoaders ────────────────────────────────────────────────────
     if stage == "type":
-        bs = batch_size or 256
+        bs = batch_size or 32
         train_loader, _val_loader, test_loader, class_names = get_type_dataloaders(
             data_root=data_path,
             batch_size=bs,
@@ -432,7 +432,7 @@ def train(
                 "--brats-path is required for --stage grade.\n"
                 "Example: --brats-path data/raw/BraTS2020_training_data/content/data/"
             )
-        bs = batch_size or 256
+        bs = batch_size or 32
         train_loader, val_loader, class_names = get_grade_dataloaders(
             grade_root=data_path,
             brats_root=brats_h5_dir,
@@ -653,8 +653,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Directory to write checkpoints. Default: models/tumor_classifier/",
     )
     p.add_argument(
-        "--batch-size", type=int, default=256,
-        help="Mini-batch size. Default: 256 (optimized for RTX 6000 Ada).",
+        "--batch-size", type=int, default=32,
+        help="Mini-batch size. Default: 32 (optimized for DGX without OOM).",
     )
     p.add_argument(
         "--lr", type=float, default=1e-3,
