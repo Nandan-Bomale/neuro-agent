@@ -92,7 +92,7 @@ from agents.tumor_classification_agent.model import (
 
 PHASE1_EPOCHS   = 25      # epochs with frozen backbone
 PHASE2_LR_SCALE = 0.005  # lower phase-2 backbone LR to prevent catastrophic forgetting
-N_UNFREEZE      = 120     # Safe partial unfreeze (last 2 MBConv blocks) to prevent forgetting
+N_UNFREEZE      = 10000   # Safely unfreeze ENTIRE backbone (BN is safely locked to eval)
 
 
 # ---------------------------------------------------------------------------
