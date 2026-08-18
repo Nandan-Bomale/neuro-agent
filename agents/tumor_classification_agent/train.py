@@ -92,9 +92,7 @@ from agents.tumor_classification_agent.model import (
 
 PHASE1_EPOCHS   = 25      # epochs with frozen backbone
 PHASE2_LR_SCALE = 0.05   # phase-2 backbone LR = phase-1 LR * 0.05
-N_UNFREEZE      = 120     # param tensors to unfreeze per backbone in Phase 2
-                          # EfficientNet-B4 has 420 total; 120 ≈ last 2 full MBConv blocks
-                          # (was 10 → only 6 actual conv tensors: not enough for MRI domain)
+N_UNFREEZE      = 10000   # Set massive to safely unfreeze ENTIRE backbone for >95% clinical accuracy
 
 
 # ---------------------------------------------------------------------------

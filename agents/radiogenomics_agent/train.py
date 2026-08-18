@@ -156,9 +156,9 @@ def _build_parser():
     p.add_argument("--csv-path", type=str, required=True, help="Path to labels.csv")
     p.add_argument("--data-dir", type=str, required=True, help="Directory containing patient subfolders")
     p.add_argument("--epochs", type=int, default=50, help="Number of training epochs")
-    p.add_argument("--batch-size", type=int, default=4, help="Batch size (reduce if VRAM is exceeded)")
+    p.add_argument("--batch-size", type=int, default=16, help="Batch size (reduce if VRAM is exceeded)")
     p.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
-    p.add_argument("--num-workers", type=int, default=8, help="Dataloader workers (0 on Windows)")
+    p.add_argument("--num-workers", type=int, default=16, help="Dataloader workers (0 on Windows)")
     p.add_argument("--save-dir", type=str, default="models/radiogenomics_agent/", help="Save directory")
     p.add_argument("--seed", type=int, default=42, help="Random seed")
     return p

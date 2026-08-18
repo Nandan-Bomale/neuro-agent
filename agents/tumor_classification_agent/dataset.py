@@ -127,16 +127,17 @@ def _train_transforms() -> transforms.Compose:
     return transforms.Compose([
         EnsureRGB(),
         # Resize slightly over target so random crop has room to move
-        transforms.Resize((IMAGE_SIZE + 20, IMAGE_SIZE + 20)),
+        transforms.Resize((IMAGE_SIZE + 30, IMAGE_SIZE + 30)),
         transforms.RandomCrop(IMAGE_SIZE),
         transforms.RandomHorizontalFlip(p=0.5),
-        transforms.RandomVerticalFlip(p=0.3),
-        transforms.RandomRotation(degrees=15),
-        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1),
-        # Zoom: RandomAffine with scale acts as zoom in/out
-        transforms.RandomAffine(degrees=0, scale=(0.85, 1.15)),
+        transforms.RandomVerticalFlip(p=0.5),
+        transforms.RandomRotation(degrees=45),
+        transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.2),
+        # Zoom and shear
+        transforms.RandomAffine(degrees=0, scale=(0.8, 1.2), shear=15),
         transforms.ToTensor(),
-        AddGaussianNoise(std=0.02),
+        transforms.RandomErasing(p=0.3, scale=(0.02, 0.15)),
+        AddGaussianNoise(std=0.03),
         transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
     ])
 
