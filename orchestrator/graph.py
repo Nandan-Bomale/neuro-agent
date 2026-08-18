@@ -32,11 +32,14 @@ Graph topology:
   └─────────────────────────────────────────────────────────────────────┘
 
 Execution order rationale:
-  vision runs first — its confidence score and detected regions are required
-  by both clinical (to assess history consistency) and rag (to query the right
-  literature). clinical runs before rag so its risk-factor analysis can also
-  inform the literature query. report combines all three, then verification
-  gates the final output.
+  1. vision runs first to extract 2D slice
+  2. tumor_classification determines type/grade from the 2D slice
+  3. radiogenomics predicts mutations from 3D MRI
+  4. surgical plans resection from 3D mask
+  5. prognostic uses type/grade/mutations to predict survival
+  6. clinical_trials fetches matched trials
+  7. neuro_oncologist generates final NCCN-guideline treatment plan
+  8. verification gates the output for explainability or human review
 
 Usage:
     from orchestrator.graph import compile_graph, run_pipeline
@@ -61,11 +64,13 @@ from typing import Any
 from langgraph.graph import END, START, StateGraph
 
 from orchestrator.nodes import (
-    clinical_node,
+    radiogenomics_node,
+    surgical_node,
+    prognostic_node,
+    clinical_trial_node,
+    neuro_oncologist_node,
     explainability_node,
     human_review_node,
-    rag_node,
-    report_node,
     tumor_classification_node,
     verification_node,
     vision_node,
@@ -85,9 +90,11 @@ logger = logging.getLogger(__name__)
 
 _NODE_VISION = "vision"
 _NODE_TUMOR_CLASSIFICATION = "tumor_classification"
-_NODE_CLINICAL = "clinical"
-_NODE_RAG = "rag"
-_NODE_REPORT = "report"
+_NODE_RADIOGENOMICS = "radiogenomics"
+_NODE_SURGICAL = "surgical"
+_NODE_PROGNOSTIC = "prognostic"
+_NODE_CLINICAL_TRIALS = "clinical_trials"
+_NODE_NEURO_ONCOLOGIST = "neuro_oncologist"
 _NODE_VERIFICATION = "verification"
 _NODE_EXPLAINABILITY = ROUTE_EXPLAINABILITY    # "explainability"
 _NODE_HUMAN_REVIEW = ROUTE_HUMAN_REVIEW        # "human_review"
@@ -110,24 +117,24 @@ def build_graph() -> StateGraph:
     # ── Register nodes ─────────────────────────────────────────────────────────
     builder.add_node(_NODE_VISION, vision_node)
     builder.add_node(_NODE_TUMOR_CLASSIFICATION, tumor_classification_node)
-    builder.add_node(_NODE_CLINICAL, clinical_node)
-    builder.add_node(_NODE_RAG, rag_node)
-    builder.add_node(_NODE_REPORT, report_node)
+    builder.add_node(_NODE_RADIOGENOMICS, radiogenomics_node)
+    builder.add_node(_NODE_SURGICAL, surgical_node)
+    builder.add_node(_NODE_PROGNOSTIC, prognostic_node)
+    builder.add_node(_NODE_CLINICAL_TRIALS, clinical_trial_node)
+    builder.add_node(_NODE_NEURO_ONCOLOGIST, neuro_oncologist_node)
     builder.add_node(_NODE_VERIFICATION, verification_node)
     builder.add_node(_NODE_EXPLAINABILITY, explainability_node)
     builder.add_node(_NODE_HUMAN_REVIEW, human_review_node)
 
-    # ── Edges: strictly sequential pipeline ─────────────────────────────────────────
-    # vision first, then tumor classification (type+grade), then clinical
-    # (which now knows BOTH what was found AND what type it is).
+    # ── Edges: strictly sequential pipeline ────────────────────────────────────
     builder.add_edge(START, _NODE_VISION)
     builder.add_edge(_NODE_VISION, _NODE_TUMOR_CLASSIFICATION)
-    builder.add_edge(_NODE_TUMOR_CLASSIFICATION, _NODE_CLINICAL)
-    builder.add_edge(_NODE_CLINICAL, _NODE_RAG)
-    builder.add_edge(_NODE_RAG, _NODE_REPORT)
-
-    # ── Edges: sequential pipeline after report ────────────────────────────────
-    builder.add_edge(_NODE_REPORT, _NODE_VERIFICATION)
+    builder.add_edge(_NODE_TUMOR_CLASSIFICATION, _NODE_RADIOGENOMICS)
+    builder.add_edge(_NODE_RADIOGENOMICS, _NODE_SURGICAL)
+    builder.add_edge(_NODE_SURGICAL, _NODE_PROGNOSTIC)
+    builder.add_edge(_NODE_PROGNOSTIC, _NODE_CLINICAL_TRIALS)
+    builder.add_edge(_NODE_CLINICAL_TRIALS, _NODE_NEURO_ONCOLOGIST)
+    builder.add_edge(_NODE_NEURO_ONCOLOGIST, _NODE_VERIFICATION)
 
     # ── Conditional edge: verification → explainability | human_review ─────────
     builder.add_conditional_edges(

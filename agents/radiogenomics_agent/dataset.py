@@ -135,8 +135,8 @@ class RadiogenomicsDataset(Dataset):
             if len(paths) == 4:
                 item = {
                     **paths, 
-                    "idh": float(row["IDH_value"]), 
-                    "mgmt": float(row["MGMT_value"])
+                    "idh": float(row.get("IDH_value", 0.0)), 
+                    "mgmt": float(row.get("MGMT_value", 0.0))
                 }
                 self.samples.append(item)
             else:

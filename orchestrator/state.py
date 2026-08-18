@@ -59,6 +59,9 @@ class NeuroAgentState(TypedDict, total=False):
     mri_scan_path: str
     """Absolute or relative path to the NIfTI MRI scan file."""
 
+    mri_slice_path: Optional[str]
+    """Path to the extracted 2D slice for Tumor Classification Agent."""
+
     patient_data: dict[str, Any]
     """
     Structured patient metadata dict. Expected keys (non-exhaustive):
@@ -107,40 +110,45 @@ class NeuroAgentState(TypedDict, total=False):
       - tta_used: bool              — True if Test-Time Augmentation was applied
     """
 
-    # ── Clinical History Agent output ─────────────────────────────────────────
-    clinical_analysis: dict[str, Any]
+    # ── Radiogenomics Agent output ────────────────────────────────────────────
+    radiogenomics_findings: dict[str, Any]
     """
-    Output from ClinicalHistoryAgent.run(). Expected keys:
-      - history_summary: str        — concise clinical narrative
-      - risk_factors: list[str]     — identified risk factors
-      - clinical_fit_score: float   — how well history fits findings [0.0, 1.0]
-      - reasoning: str              — LLM reasoning chain
+    Output from RadiogenomicsAgent.run(). Expected keys:
+      - idh_mutation_status: str    — "mutant" | "wildtype"
+      - mgmt_methylation_status: str — "methylated" | "unmethylated"
     """
 
-    # ── RAG Literature Agent output ───────────────────────────────────────────
-    literature_results: list[dict[str, Any]]
+    # ── Surgical Planning Agent output ────────────────────────────────────────
+    surgical_analysis: dict[str, Any]
     """
-    Output from RAGLiteratureAgent.run(). List of retrieved papers.
-    Each item contains:
-      - title: str
-      - abstract: str
-      - authors: list[str]
-      - year: int
-      - pmid: str          — PubMed ID
-      - relevance_score: float
-      - citation: str      — formatted citation string
+    Output from SurgicalAgent.run(). Expected keys:
+      - resectability_score: float  — e.g., 0.85
+      - eloquent_area_proximity: str — "high" | "low"
     """
 
-    # ── Report Generation Agent output ────────────────────────────────────────
-    report: dict[str, Any]
+    # ── Prognostic Agent output ───────────────────────────────────────────────
+    prognostic_analysis: dict[str, Any]
     """
-    Output from ReportGenerationAgent.run(). Structured radiology report.
+    Output from PrognosticAgent.run(). Expected keys:
+      - overall_survival_months: float
+      - progression_free_survival_months: float
+    """
+
+    # ── Clinical Trial Agent output ───────────────────────────────────────────
+    clinical_trials: list[dict[str, Any]]
+    """
+    Output from ClinicalTrialAgent.run(). List of relevant trials from clinicaltrials.gov.
+    """
+
+    # ── Neuro-Oncologist Agent output ─────────────────────────────────────────
+    neuro_oncologist_plan: dict[str, Any]
+    """
+    Output from NeuroOncologistAgent.run(). The final treatment plan based on NCCN guidelines.
     Expected keys:
-      - findings: str           — description of what was found
-      - impression: str         — radiologist-style summary and conclusion
-      - recommendations: str    — suggested next steps (biopsy, follow-up, etc.)
-      - cited_literature: list  — references used from literature_results
-      - generated_at: str       — ISO timestamp
+      - treatment_recommendation: str
+      - chemotherapy_protocol: str
+      - radiotherapy_protocol: str
+      - generated_at: str
     """
 
     overall_confidence: float
