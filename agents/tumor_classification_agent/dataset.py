@@ -600,16 +600,23 @@ class BraTSH5GradeDataset(Dataset):
         with self._h5py.File(str(h5_path), 'r') as f:
             image = f['image'][:]       # (240, 240, 4) float64
 
-        # T1ce channel (index 2)
-        t1ce = image[:, :, BRATS_T1CE_CHANNEL].astype(np.float32)
+        # ── 3-channel composite: FLAIR + T1ce + T2 ────────────────────────────
+        # Using all 3 diagnostic modalities gives 3× more information to
+        # distinguish Grade III vs Grade IV compared to T1ce-only:
+        #   Ch-0 FLAIR  → R: edema extent (larger in Grade IV)
+        #   Ch-2 T1ce   → G: enhancing tumour (necrosis visible in Grade IV)
+        #   Ch-3 T2     → B: T2 hyperintensity (correlates with infiltration)
+        def _norm_u8(arr: np.ndarray) -> np.ndarray:
+            arr = arr.astype(np.float32)
+            m   = float(arr.max())
+            return (arr / m * 255).astype(np.uint8) if m > 0.0 else arr.astype(np.uint8)
 
-        t1ce_max = float(t1ce.max())
-        if t1ce_max > 0.0:
-            t1ce = t1ce / t1ce_max
+        flair = _norm_u8(image[:, :, 0])   # FLAIR  → Red
+        t1ce  = _norm_u8(image[:, :, 2])   # T1ce   → Green
+        t2    = _norm_u8(image[:, :, 3])   # T2     → Blue
 
-        pil_img = Image.fromarray(
-            (t1ce * 255).astype(np.uint8), mode='L'
-        ).convert('RGB')
+        rgb     = np.stack([flair, t1ce, t2], axis=2)   # (240, 240, 3) uint8
+        pil_img = Image.fromarray(rgb, mode='RGB')
 
         if self.transform is not None:
             pil_img = self.transform(pil_img)
