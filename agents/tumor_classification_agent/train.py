@@ -91,7 +91,7 @@ from agents.tumor_classification_agent.model import (
 # ---------------------------------------------------------------------------
 
 PHASE1_EPOCHS   = 25      # epochs with frozen backbone
-PHASE2_LR_SCALE = 0.05   # phase-2 backbone LR = phase-1 LR * 0.05
+PHASE2_LR_SCALE = 0.005  # lower phase-2 backbone LR to prevent catastrophic forgetting
 N_UNFREEZE      = 10000   # Set massive to safely unfreeze ENTIRE backbone for >95% clinical accuracy
 
 
