@@ -414,6 +414,8 @@ def train(
             num_workers=num_workers,
             seed=seed,
             val_split=0.0,   # use ALL 5600 Training/ images; Testing/ is our val set
+            brats_glioma_dir=brats_h5_dir,   # inject BraTS glioma slices if provided
+            brats_max_slices=8000,
         )
         # Use the official Testing/ split as validation — not a random carve from
         # Training/.  This gives 5600 training images (vs 4760) and a proper

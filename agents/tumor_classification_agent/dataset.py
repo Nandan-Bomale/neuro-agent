@@ -174,15 +174,96 @@ def _make_weighted_sampler(
 
 
 # ============================================================================
+# BraTS Glioma helper — reuses H5 reading from BraTSH5GradeDataset
+# ============================================================================
+
+class BraTSGliomaTypeDataset(Dataset):
+    '''Wraps BraTS H5 slices as label=0 (glioma) for the Type classifier.
+
+    Reads the T1ce channel from every H5 file that passes the minimum mask
+    threshold. All slices are treated as glioma (class 0) regardless of grade.
+    This massively boosts the training-set coverage for the Glioma class.
+
+    Args:
+        h5_dir:    Directory containing volume_N_slice_S.h5 files.
+        transform: Applied in __getitem__ after PIL conversion.
+        max_slices: Cap on total slices to keep training balanced (default 8000).
+    '''
+
+    def __init__(
+        self,
+        h5_dir:    Path,
+        transform: Optional[Callable] = None,
+        max_slices: int = 8000,
+    ) -> None:
+        super().__init__()
+        try:
+            import h5py
+            self._h5py = h5py
+        except ImportError:
+            raise ImportError('h5py is required: pip install h5py')
+
+        self.transform = transform
+        h5_dir = Path(h5_dir)
+        all_h5 = sorted(h5_dir.glob('volume_*_slice_*.h5'))
+
+        print(f'[BraTSGliomaType] Scanning {len(all_h5)} H5 files for glioma slices...')
+        self._samples: List[Path] = []
+        skipped = 0
+        for h5_path in all_h5:
+            try:
+                with self._h5py.File(str(h5_path), 'r') as f:
+                    mask_sum = int(f['mask'][:].sum())
+            except Exception:
+                continue
+            if mask_sum < BRATS_MIN_MASK_SUM:
+                skipped += 1
+                continue
+            self._samples.append(h5_path)
+            if len(self._samples) >= max_slices:
+                break
+
+        print(f'[BraTSGliomaType] Kept {len(self._samples)} glioma slices (bg_skipped={skipped})')
+
+    def __len__(self) -> int:
+        return len(self._samples)
+
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, int]:
+        h5_path = self._samples[idx]
+        with self._h5py.File(str(h5_path), 'r') as f:
+            image = f['image'][:]          # (240, 240, 4) float64
+
+        t1ce = image[:, :, BRATS_T1CE_CHANNEL].astype(np.float32)
+        t1ce_max = float(t1ce.max())
+        if t1ce_max > 0.0:
+            t1ce = t1ce / t1ce_max
+
+        pil_img = Image.fromarray(
+            (t1ce * 255).astype(np.uint8), mode='L'
+        ).convert('RGB')
+
+        if self.transform is not None:
+            pil_img = self.transform(pil_img)
+
+        return pil_img, 0   # label=0 → glioma
+
+    @property
+    def targets(self) -> List[int]:
+        return [0] * len(self._samples)
+
+
+# ============================================================================
 # Stage 1 — Tumor Type Dataset (ImageFolder)
 # ============================================================================
 
 def get_type_dataloaders(
-    data_root:   str | Path,
-    batch_size:  int  = 16,
-    num_workers: int  = 4,
-    val_split:   float = 0.15,
-    seed:        int  = 42,
+    data_root:        str | Path,
+    batch_size:       int   = 16,
+    num_workers:      int   = 4,
+    val_split:        float = 0.15,
+    seed:             int   = 42,
+    brats_glioma_dir: Optional[str | Path] = None,
+    brats_max_slices: int   = 8000,
 ) -> Tuple[DataLoader, DataLoader, DataLoader, List[str]]:
     """Build train / val / test DataLoaders for Stage 1 (tumor type).
 
@@ -252,9 +333,27 @@ def get_type_dataloaders(
     train_subset = torch.utils.data.Subset(full_train_aug,   train_idx)
     val_subset   = torch.utils.data.Subset(full_train_clean, val_idx)
 
-    # ── Weighted sampler for training ────────────────────────────────────────
-    train_labels = [full_train_aug.targets[i] for i in train_idx]
-    sampler      = _make_weighted_sampler(train_labels, n_classes)
+    # ── Optionally inject BraTS glioma slices into training ──────────────────
+    # Glioma is the hardest class (72% accuracy). BraTS has 22,000+ real glioma
+    # MRI slices. We cap at brats_max_slices to keep class balance manageable.
+    if brats_glioma_dir is not None:
+        brats_glioma = BraTSGliomaTypeDataset(
+            h5_dir=brats_glioma_dir,
+            transform=_train_transforms(),
+            max_slices=brats_max_slices,
+        )
+        combined_train = torch.utils.data.ConcatDataset([train_subset, brats_glioma])
+        # Rebuild labels list: original kaggle labels + glioma (0) for all BraTS
+        kaggle_labels = [full_train_aug.targets[i] for i in train_idx]
+        brats_labels  = [0] * len(brats_glioma)
+        train_labels  = kaggle_labels + brats_labels
+        n_train       = len(train_labels)
+        print(f"[TypeDataset] +BraTS glioma: total_train={n_train} (kaggle={len(kaggle_labels)} brats={len(brats_labels)})")
+    else:
+        combined_train = train_subset
+        train_labels   = [full_train_aug.targets[i] for i in train_idx]
+
+    sampler = _make_weighted_sampler(train_labels, n_classes)
 
     # ── Test dataset (no augmentation) ───────────────────────────────────────
     test_dataset = datasets.ImageFolder(
@@ -263,7 +362,7 @@ def get_type_dataloaders(
     )
 
     train_loader = DataLoader(
-        train_subset,
+        combined_train,
         batch_size=batch_size,
         sampler=sampler,          # mutually exclusive with shuffle=True
         num_workers=num_workers,
