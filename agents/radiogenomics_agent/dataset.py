@@ -48,18 +48,18 @@ PIXDIM = (1.0, 1.0, 1.0)
 # Transforms
 # ---------------------------------------------------------------------------
 
+from monai.transforms import Resized
 def _shared_load_and_preprocess() -> list:
     """Base preprocessing pipeline."""
     return [
         LoadImaged(keys=MODALITY_KEYS, image_only=True),
         EnsureChannelFirstd(keys=MODALITY_KEYS),
+        # Kaggle DICOM sequences have different shapes, force them to the same size before concatenating
+        Resized(keys=MODALITY_KEYS, spatial_size=ROI_SIZE, mode="trilinear"),
         ConcatItemsd(keys=MODALITY_KEYS, name="image", dim=0),
         DeleteItemsd(keys=MODALITY_KEYS),
-        Spacingd(keys=["image"], pixdim=PIXDIM, mode=("bilinear",)),
         Orientationd(keys=["image"], axcodes="RAS"),
         NormalizeIntensityd(keys=["image"], nonzero=True, channel_wise=True),
-        CropForegroundd(keys=["image"], source_key="image"),
-        SpatialPadd(keys=["image"], spatial_size=ROI_SIZE, mode="constant"),
     ]
 
 def get_radiogenomics_transforms(is_train: bool = True) -> Compose:
