@@ -412,7 +412,7 @@ def train(
 
     # ── Build DataLoaders ────────────────────────────────────────────────────
     if stage == "type":
-        bs = batch_size or 16
+        bs = batch_size or 256
         train_loader, _val_loader, test_loader, class_names = get_type_dataloaders(
             data_root=data_path,
             batch_size=bs,
@@ -434,10 +434,10 @@ def train(
                 "--brats-path is required for --stage grade.\n"
                 "Example: --brats-path data/raw/BraTS2020_training_data/content/data/"
             )
-        bs = batch_size or 8
+        bs = batch_size or 256
         train_loader, val_loader, class_names = get_grade_dataloaders(
-            data_path=data_path,
-            brats_h5_dir=brats_h5_dir,
+            grade_root=data_path,
+            brats_root=brats_h5_dir,
             batch_size=bs,
             num_workers=num_workers,
             seed=seed,
@@ -655,16 +655,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Directory to write checkpoints. Default: models/tumor_classifier/",
     )
     p.add_argument(
-        "--batch-size", type=int, default=None,
-        help="Mini-batch size. Auto-selected if omitted (16 type / 8 grade).",
+        "--batch-size", type=int, default=256,
+        help="Mini-batch size. Default: 256 (optimized for RTX 6000 Ada).",
     )
     p.add_argument(
         "--lr", type=float, default=1e-3,
         help="Phase-1 initial learning rate. Default: 1e-3.",
     )
     p.add_argument(
-        "--num-workers", type=int, default=4,
-        help="DataLoader workers. Set 0 on Windows if multiprocessing issues occur. Default: 4.",
+        "--num-workers", type=int, default=16,
+        help="DataLoader workers. Set 0 on Windows if multiprocessing issues occur. Default: 16.",
     )
     p.add_argument(
         "--seed", type=int, default=42,
