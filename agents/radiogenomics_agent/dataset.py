@@ -125,12 +125,23 @@ class RadiogenomicsDataset(Dataset):
                 
             # Locate modalities
             paths = {}
+            dicom_mappings = {
+                "flair": "FLAIR",
+                "t1": "T1w",
+                "t1ce": "T1wCE",
+                "t2": "T2w"
+            }
             for mod in MODALITY_KEYS:
                 matches = list(subject_dir.glob(f"*{mod}*.nii.gz"))
                 if not matches:
                     matches = list(subject_dir.glob(f"*{mod}*.nii"))
+                
                 if matches:
                     paths[mod] = str(matches[0])
+                else:
+                    dcm_dir = subject_dir / dicom_mappings.get(mod, mod)
+                    if dcm_dir.exists() and dcm_dir.is_dir():
+                        paths[mod] = str(dcm_dir)
             
             if len(paths) == 4:
                 item = {
