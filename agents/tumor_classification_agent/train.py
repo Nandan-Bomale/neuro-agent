@@ -92,7 +92,7 @@ from agents.tumor_classification_agent.model import (
 
 PHASE1_EPOCHS   = 25      # epochs with frozen backbone
 PHASE2_LR_SCALE = 0.005  # lower phase-2 backbone LR to prevent catastrophic forgetting
-N_UNFREEZE      = 10000   # Set massive to safely unfreeze ENTIRE backbone for >95% clinical accuracy
+N_UNFREEZE      = 120     # Safe partial unfreeze (last 2 MBConv blocks) to prevent forgetting
 
 
 # ---------------------------------------------------------------------------
@@ -642,8 +642,8 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
-        "--epochs", type=int, default=40,
-        help="Total training epochs (Phase 1 = first 15, Phase 2 = rest). Default: 40.",
+        "--epochs", type=int, default=100,
+        help="Total training epochs (Phase 1 = first 25, Phase 2 = rest). Default: 100.",
     )
     p.add_argument(
         "--save-dir", default="models/tumor_classifier/",
