@@ -174,13 +174,10 @@ def _freeze_backbone_bn(model: nn.Module) -> None:
         10× slower EMA: statistics stabilise over ~100 batches instead of ~10.
     """
     for module in model.modules():
-        if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d)):
-            if module.weight is not None and not module.weight.requires_grad:
-                # Fully frozen backbone layer — lock running stats
-                module.eval()
-            else:
-                # Unfrozen layer — allow adaptation but slow the EMA
-                module.momentum = 0.01
+        if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
+            # Always lock BatchNorm running stats when fine-tuning pretrained models!
+            # If they switch to train(), the ImageNet stats are destroyed, causing val_loss to explode.
+            module.eval()
 
 def _train_epoch(
     model:       nn.Module,
