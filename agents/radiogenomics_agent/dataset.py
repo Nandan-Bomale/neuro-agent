@@ -203,6 +203,21 @@ class RadiogenomicsDataset(Dataset):
                 paths["t2"] = paths["flair"] # Duplicate FLAIR as T2
                             
             if len(paths) == 4:
+                # Validate NIfTI headers to prevent corrupt files from crashing the cache
+                is_valid = True
+                for mod_path in paths.values():
+                    if mod_path.endswith(".nii") or mod_path.endswith(".nii.gz"):
+                        try:
+                            import nibabel as nib
+                            nib.load(mod_path)
+                        except Exception:
+                            is_valid = False
+                            break
+                            
+                if not is_valid:
+                    warnings.warn(f"Corrupt file found for {subject_id}. Skipping.")
+                    continue
+                    
                 item = {
                     **paths, 
                     "idh": float(idh_val), 
@@ -212,7 +227,7 @@ class RadiogenomicsDataset(Dataset):
             else:
                 warnings.warn(f"Missing modalities for {subject_id}. Found: {list(paths.keys())}")
                 
-        print(f"[RadiogenomicsDataset] Found {len(self.samples)} complete samples.")
+        print(f"[RadiogenomicsDataset] Found {len(self.samples)} complete and valid samples.")
 
     def __len__(self) -> int:
         return len(self.samples)
