@@ -87,7 +87,7 @@ def tumor_classification_node(state: NeuroAgentState) -> dict[str, Any]:
     glioma GRADE (II/III/IV) with a second EfficientNet-B4.
 
     Reads:  state["vision_findings"]  (for context)
-            state["mri_scan_path"]    (for 2D slice extraction)
+            state["mri_slice_path"]   (2D slice extracted by Vision Agent)
     Writes: state["tumor_classification_findings"]
     """
     logger.info("[tumor_classification_node] Starting TumorClassificationAgent")
@@ -103,13 +103,28 @@ def tumor_classification_node(state: NeuroAgentState) -> dict[str, Any]:
     agent = TumorClassificationAgent()
     result = agent.run(dict(state))
 
+    # The agent returns {"agent_name":..., "success":..., "output": {...}, "confidence":...}
+    # We need to map its "output" sub-dict to state["tumor_classification_findings"]
+    agent_output = result.get("output", {})
+    confidence   = result.get("confidence", 0.0)
+
+    tumor_classification_findings = {
+        "tumor_type":          agent_output.get("tumor_type"),
+        "tumor_grade":         agent_output.get("tumor_grade"),
+        "type_probabilities":  agent_output.get("type_probabilities"),
+        "grade_probabilities": agent_output.get("grade_probabilities"),
+        "clinical_urgency":    agent_output.get("clinical_urgency"),
+        "confidence":          confidence,
+        "tta_used":            agent_output.get("tta_used", False),
+    }
+
     logger.info(
         "[tumor_classification_node] Done | type=%s | grade=%s | confidence=%.4f",
-        result.get("tumor_classification_findings", {}).get("tumor_type", "?"),
-        result.get("tumor_classification_findings", {}).get("tumor_grade", "N/A"),
-        result.get("tumor_classification_findings", {}).get("confidence", -1),
+        tumor_classification_findings.get("tumor_type", "?"),
+        tumor_classification_findings.get("tumor_grade", "N/A"),
+        tumor_classification_findings.get("confidence", -1),
     )
-    return result
+    return {"tumor_classification_findings": tumor_classification_findings}
 
 
 def radiogenomics_node(state: NeuroAgentState) -> dict[str, Any]:
