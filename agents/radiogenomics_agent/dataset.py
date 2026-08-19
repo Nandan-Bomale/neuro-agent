@@ -157,38 +157,34 @@ class RadiogenomicsDataset(Dataset):
                 warnings.warn(f"Subject dir not found for {subject_id} at {subject_dir}")
                 continue
                 
-            # Locate modalities (using rglob for nested UCSF folders)
+            # Locate modalities (case-insensitive substring matching)
             paths = {}
-            dicom_mappings = {
-                "flair": "FLAIR",
-                "t1": "T1w",
-                "t1ce": "T1wCE",
-                "t2": "T2w"
-            }
-            # UCSF specific keywords
-            ucsf_mappings = {
-                "flair": "FLAIR",
-                "t1": "T1_bias",
-                "t1ce": "T1gad",
-                "t2": "T2_bias"
-            }
-
-            for mod in MODALITY_KEYS:
-                # 1. Try standard BraTS name directly
-                matches = list(subject_dir.rglob(f"*{mod}*.nii.gz")) + list(subject_dir.rglob(f"*{mod}*.nii"))
-                
-                # 2. Try UCSF specific name if standard not found
-                if not matches and "UCSF" in subject_id:
-                    ucsf_mod = ucsf_mappings.get(mod, mod)
-                    matches = list(subject_dir.rglob(f"*{ucsf_mod}*.nii.gz")) + list(subject_dir.rglob(f"*{ucsf_mod}*.nii"))
-
-                if matches:
-                    paths[mod] = str(matches[0])
-                else:
-                    dcm_dir = subject_dir / dicom_mappings.get(mod, mod)
-                    if dcm_dir.exists() and dcm_dir.is_dir():
-                        paths[mod] = str(dcm_dir)
+            all_niftis = list(subject_dir.rglob("*.nii.gz")) + list(subject_dir.rglob("*.nii"))
             
+            for mod in MODALITY_KEYS:
+                # Map internal keys to common substring markers
+                markers = {
+                    "flair": ["flair"],
+                    "t1ce":  ["t1ce", "t1gad", "t1_gd", "t1c"],
+                    "t1":    ["t1"], # checked AFTER t1ce to avoid collision if not careful, but we'll handle it
+                    "t2":    ["t2"]
+                }
+                
+                mod_markers = markers[mod]
+                for path in all_niftis:
+                    name_lower = path.name.lower()
+                    
+                    # For T1, ensure it's not actually a T1ce scan
+                    if mod == "t1":
+                        is_t1ce = any(m in name_lower for m in markers["t1ce"])
+                        if "t1" in name_lower and not is_t1ce:
+                            paths[mod] = str(path)
+                            break
+                    else:
+                        if any(m in name_lower for m in mod_markers):
+                            paths[mod] = str(path)
+                            break
+                            
             if len(paths) == 4:
                 item = {
                     **paths, 
