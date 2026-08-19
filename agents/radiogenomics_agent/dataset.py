@@ -159,7 +159,9 @@ class RadiogenomicsDataset(Dataset):
                 
             # Locate modalities (case-insensitive substring matching for NIfTIs)
             paths = {}
-            all_niftis = list(subject_dir.rglob("*.nii.gz")) + list(subject_dir.rglob("*.nii"))
+            # Kaggle unzipped them with folder names ending in .nii! We must ensure it's a file.
+            raw_niftis = list(subject_dir.rglob("*.nii.gz")) + list(subject_dir.rglob("*.nii"))
+            all_niftis = [p for p in raw_niftis if p.is_file()]
             
             dicom_mappings = {
                 "flair": "FLAIR",
