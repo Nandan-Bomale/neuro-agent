@@ -157,24 +157,29 @@ class RadiogenomicsDataset(Dataset):
                 warnings.warn(f"Subject dir not found for {subject_id} at {subject_dir}")
                 continue
                 
-            # Locate modalities (case-insensitive substring matching)
+            # Locate modalities (case-insensitive substring matching for NIfTIs)
             paths = {}
             all_niftis = list(subject_dir.rglob("*.nii.gz")) + list(subject_dir.rglob("*.nii"))
+            
+            dicom_mappings = {
+                "flair": "FLAIR",
+                "t1": "T1w",
+                "t1ce": "T1wCE",
+                "t2": "T2w"
+            }
             
             for mod in MODALITY_KEYS:
                 # Map internal keys to common substring markers
                 markers = {
                     "flair": ["flair"],
                     "t1ce":  ["t1ce", "t1gad", "t1_gd", "t1c"],
-                    "t1":    ["t1"], # checked AFTER t1ce to avoid collision if not careful, but we'll handle it
+                    "t1":    ["t1"], 
                     "t2":    ["t2"]
                 }
                 
                 mod_markers = markers[mod]
                 for path in all_niftis:
                     name_lower = path.name.lower()
-                    
-                    # For T1, ensure it's not actually a T1ce scan
                     if mod == "t1":
                         is_t1ce = any(m in name_lower for m in markers["t1ce"])
                         if "t1" in name_lower and not is_t1ce:
@@ -184,6 +189,18 @@ class RadiogenomicsDataset(Dataset):
                         if any(m in name_lower for m in mod_markers):
                             paths[mod] = str(path)
                             break
+                
+                # DICOM Fallback (Crucial for BraTS2021)
+                if mod not in paths:
+                    dcm_dir = subject_dir / dicom_mappings.get(mod, mod)
+                    if dcm_dir.exists() and dcm_dir.is_dir():
+                        paths[mod] = str(dcm_dir)
+            
+            # Impute missing modalities for UCSF (Kaggle dataset is missing T1/T2)
+            if "t1" not in paths and "t1ce" in paths:
+                paths["t1"] = paths["t1ce"]  # Duplicate T1c as T1
+            if "t2" not in paths and "flair" in paths:
+                paths["t2"] = paths["flair"] # Duplicate FLAIR as T2
                             
             if len(paths) == 4:
                 item = {
