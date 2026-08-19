@@ -126,9 +126,22 @@ class RadiogenomicsDataset(Dataset):
                 idh_val = row.get("IDH_value", 0.0)
                 mgmt_val = row.get("MGMT_value", 0.0)
             elif "ID" in row and pd.notna(row["ID"]): # UCSF format
-                subject_id = str(row["ID"]) # e.g. UCSF-PDGM-0004
-                # UCSF folders look like UCSF-PDGM-0004_nifti
-                subject_dir = self.data_dir / "UCSF-PDGM" / "UCSF-PDGM" / f"{subject_id}_nifti"
+                raw_id = str(row["ID"]) # e.g. UCSF-PDGM-541 or UCSF-PDGM-0541
+                
+                # Ensure 4-digit zero padding for the number part
+                if "UCSF-PDGM-" in raw_id:
+                    num_part = raw_id.split("-")[-1]
+                    subject_id = f"UCSF-PDGM-{num_part.zfill(4)}"
+                else:
+                    subject_id = raw_id
+                
+                # Use a glob to find the directory since Kaggle unzipping can create different nesting
+                ucsf_base = self.data_dir / "UCSF-PDGM"
+                found_dirs = list(ucsf_base.rglob(f"{subject_id}_nifti"))
+                if found_dirs:
+                    subject_dir = found_dirs[0]
+                else:
+                    subject_dir = ucsf_base / "UCSF-PDGM" / f"{subject_id}_nifti"
                 
                 # Parse IDH: 'Mutant' -> 1.0, 'Wildtype' -> 0.0
                 idh_raw = str(row.get("IDH", "")).lower()
