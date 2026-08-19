@@ -575,3 +575,165 @@ class OrchestratorPipeline:
             f"OrchestratorPipeline(mock_mode={self._mock}, "
             f"graph_loaded={self._graph is not None})"
         )
+
+    # ── SSE Streaming ─────────────────────────────────────────────────────────
+
+    async def stream_run(self, scan_path: str, patient_data: dict[str, Any], run_id: str | None = None):
+        """
+        Stream the pipeline execution step-by-step for the live Visual Proof dashboard.
+        Yields JSON strings formatted as Server-Sent Events (SSE).
+        """
+        _run_id = run_id or str(uuid.uuid4())
+        
+        if not self._mock:
+            self._ensure_graph_loaded()
+
+        from orchestrator.state import create_initial_state
+        import json
+        from backend.schemas import AgentExecutionEvent
+
+        initial_state = create_initial_state(
+            mri_scan_path=scan_path,
+            patient_data=patient_data,
+            run_id=_run_id,
+        )
+
+        if self._mock:
+            logger.info("[Pipeline] MOCK stream | run_id=%s", _run_id)
+            # Simulate the 8 agents in mock mode
+            mock_agents = [
+                ("vision", "3D NIfTI Volume", {"tumour_volume_cc": 14.7, "slice": 78}, _generate_mock_heatmap()),
+                ("tumor_classification", "2D Slice 78", {"tumor_type": "Glioma", "tumor_grade": "IV"}, None),
+                ("radiogenomics", "3D MRI", {"idh_mutation": "mutant", "mgmt_methylation": "methylated"}, None),
+                ("surgical", "Tumor Vol & Type", {"resectability_score": 0.85}, None),
+                ("prognostic", "Genetics & Grade", {"overall_survival_months": 15.2, "progression_free_survival_months": 8.4}, None),
+                ("clinical_trials", "Genetics", {"found_trials": 2, "top_trial": "NCT0123456"}, None),
+                ("neuro_oncologist", "All Data", {"treatment_recommendation": "Surgery + Stupp Protocol"}, None),
+                ("explainability", "All Data", {"explanation_summary": "High activation in temporal lobe"}, _generate_mock_heatmap())
+            ]
+            
+            for i, (name, in_sum, out_data, img_b64) in enumerate(mock_agents):
+                await asyncio.sleep(1.0) # simulate processing time
+                event = AgentExecutionEvent(
+                    agent_name=name,
+                    input_summary=in_sum,
+                    output_data=out_data,
+                    image_b64=img_b64,
+                    is_final=(i == len(mock_agents) - 1)
+                )
+                yield f"data: {event.model_dump_json()}\n\n"
+            return
+
+        # ── REAL mode ─────────────────────────────────────────────────────────
+        logger.info("[Pipeline] REAL stream | run_id=%s", _run_id)
+        
+        try:
+            # astream yields chunks like {"node_name": updated_state}
+            async for chunk in self._graph.astream(initial_state):
+                for node_name, state_update in chunk.items():
+                    event = self._format_sse_event(node_name, state_update)
+                    if event:
+                        yield f"data: {event.model_dump_json()}\n\n"
+        except Exception as exc:
+            logger.exception("Streaming error: %s", exc)
+            err_event = AgentExecutionEvent(
+                agent_name="error",
+                input_summary="Pipeline Failure",
+                output_data={"error": str(exc)},
+                is_final=True
+            )
+            yield f"data: {err_event.model_dump_json()}\n\n"
+
+    def _format_sse_event(self, node_name: str, state_update: dict) -> 'AgentExecutionEvent' | None:
+        """Extracts the relevant delta from the state update for the live UI."""
+        from backend.schemas import AgentExecutionEvent
+        
+        # We must serialize safely. Skip numpy arrays or unneeded fields.
+        def _clean_dict(d: dict) -> dict:
+            return {k: v for k, v in d.items() if not isinstance(v, (np.ndarray, bytes))}
+
+        if node_name == "vision":
+            vf = state_update.get("vision_findings", {})
+            img_b64 = None
+            slice_path = state_update.get("mri_slice_path")
+            if slice_path and Path(slice_path).exists():
+                img_b64 = base64.b64encode(Path(slice_path).read_bytes()).decode("utf-8")
+            
+            return AgentExecutionEvent(
+                agent_name=node_name,
+                input_summary="Input: 3D NIfTI Volume",
+                output_data=_clean_dict(vf),
+                image_b64=img_b64
+            )
+            
+        elif node_name == "tumor_classification":
+            return AgentExecutionEvent(
+                agent_name=node_name,
+                input_summary="Input: 2D Extracted Slice",
+                output_data=_clean_dict(state_update.get("tumor_classification_findings", {}))
+            )
+            
+        elif node_name == "radiogenomics":
+            return AgentExecutionEvent(
+                agent_name=node_name,
+                input_summary="Input: 3D MRI Scan",
+                output_data=_clean_dict(state_update.get("radiogenomics_findings", {}))
+            )
+            
+        elif node_name == "surgical":
+            return AgentExecutionEvent(
+                agent_name=node_name,
+                input_summary="Input: Tumor Volume & Type",
+                output_data=_clean_dict(state_update.get("surgical_analysis", {}))
+            )
+            
+        elif node_name == "prognostic":
+            return AgentExecutionEvent(
+                agent_name=node_name,
+                input_summary="Input: Surgical & Genetic Data",
+                output_data=_clean_dict(state_update.get("prognostic_analysis", {}))
+            )
+            
+        elif node_name == "clinical_trials":
+            trials = state_update.get("clinical_trials", [])
+            out_data = {"found_trials": len(trials)}
+            if trials:
+                out_data["top_trial"] = trials[0].get("title", "Unknown")
+                
+            return AgentExecutionEvent(
+                agent_name=node_name,
+                input_summary="Input: Genetic Profile",
+                output_data=out_data
+            )
+            
+        elif node_name == "neuro_oncologist":
+            return AgentExecutionEvent(
+                agent_name=node_name,
+                input_summary="Input: All Aggregated Data",
+                output_data=_clean_dict(state_update.get("neuro_oncologist_plan", {}))
+            )
+            
+        elif node_name == "explainability":
+            img_b64 = None
+            heatmap_path = state_update.get("gradcam_heatmap_path")
+            if heatmap_path and Path(heatmap_path).exists():
+                img_b64 = base64.b64encode(Path(heatmap_path).read_bytes()).decode("utf-8")
+                
+            out_data = {"explanation_summary": state_update.get("explanation_summary", "")}
+            return AgentExecutionEvent(
+                agent_name=node_name,
+                input_summary="Input: Full State Graph",
+                output_data=out_data,
+                image_b64=img_b64,
+                is_final=True
+            )
+            
+        elif node_name == "report":
+            return AgentExecutionEvent(
+                agent_name=node_name,
+                input_summary="Input: Agent Findings",
+                output_data={"report": state_update.get("report", {}).get("impression", "...")[:100] + "..."}
+            )
+
+        # Ignore other internal nodes like verification or human_review to keep UI clean
+        return None

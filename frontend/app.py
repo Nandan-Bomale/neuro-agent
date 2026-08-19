@@ -66,7 +66,7 @@ st.set_page_config(
 # sys.path now includes project root, so `from frontend.X` resolves correctly.
 from frontend.styles import inject_css  # noqa: E402
 from frontend.components.upload_panel import render_upload_panel  # noqa: E402
-from frontend.components.report_viewer import render_results  # noqa: E402
+from frontend.components.live_dashboard import render_live_dashboard  # noqa: E402
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -94,37 +94,6 @@ def _check_backend_health() -> bool:
         return False
 
 
-def _call_analyze_api(scan_file: Any, patient_data: dict) -> dict:
-    """
-    POST the scan + patient JSON to the /api/analyze endpoint.
-
-    Args:
-        scan_file:    Streamlit UploadedFile object.
-        patient_data: Dict matching PatientData schema.
-
-    Returns:
-        Full API response dict on success.
-
-    Raises:
-        requests.HTTPError: On 4xx/5xx responses.
-        requests.ConnectionError: If backend is not reachable.
-        requests.Timeout: If the pipeline takes too long.
-        ValueError: If the response is not valid JSON.
-    """
-    patient_json = json.dumps(patient_data)
-    scan_bytes   = scan_file.getvalue()
-    mime_type    = scan_file.type or "application/octet-stream"
-
-    response = requests.post(
-        ANALYZE_URL,
-        files={"scan_file": (scan_file.name, scan_bytes, mime_type)},
-        data={"patient_json": patient_json},
-        timeout=REQUEST_TIMEOUT,
-    )
-    response.raise_for_status()
-    return response.json()
-
-
 def _file_fingerprint(f: Any) -> str:
     """Create a stable fingerprint for an uploaded file to detect changes."""
     return f"{f.name}_{f.size}"
@@ -140,10 +109,9 @@ def _render_landing() -> None:
         <div class="landing-hero">
             <div class="landing-hero-title">Upload a scan to get started</div>
             <div class="landing-hero-sub">
-                NeuroAgent analyses brain MRI scans using a seven-agent AI pipeline —
-                detecting abnormalities, reasoning over clinical context, retrieving
-                evidence from medical literature, and generating a structured
-                radiology report in seconds.
+                NeuroAgent analyses brain MRI scans using a multi-agent AI pipeline —
+                detecting abnormalities, predicting genomics, and planning surgery
+                in a live step-by-step Execution Dashboard.
             </div>
         </div>
 
@@ -154,29 +122,29 @@ def _render_landing() -> None:
                 <div class="feature-desc">U-Net segmentation detects and outlines tumour regions with pixel-level precision.</div>
             </div>
             <div class="feature-tile">
+                <span class="feature-icon">🧫</span>
+                <div class="feature-title">Classification</div>
+                <div class="feature-desc">Identifies tumor type and grade from the exact 2D extracted slice.</div>
+            </div>
+            <div class="feature-tile">
                 <span class="feature-icon">🧬</span>
-                <div class="feature-title">Clinical Reasoning</div>
-                <div class="feature-desc">LLM-powered agent cross-references patient history and symptoms with the scan findings.</div>
+                <div class="feature-title">Radiogenomics</div>
+                <div class="feature-desc">Predicts IDH mutation and MGMT methylation directly from the MRI scan.</div>
             </div>
             <div class="feature-tile">
-                <span class="feature-icon">📚</span>
-                <div class="feature-title">RAG Literature</div>
-                <div class="feature-desc">Retrieves and cites relevant PubMed papers using semantic search over medical literature.</div>
+                <span class="feature-icon">🔪</span>
+                <div class="feature-title">Surgical Planning</div>
+                <div class="feature-desc">Calculates resectability score based on tumor volume and functional areas.</div>
             </div>
             <div class="feature-tile">
-                <span class="feature-icon">📝</span>
-                <div class="feature-title">Report Generation</div>
-                <div class="feature-desc">Fine-tuned LLM writes a structured, evidence-cited radiology report in clinical language.</div>
-            </div>
-            <div class="feature-tile">
-                <span class="feature-icon">🛡️</span>
-                <div class="feature-title">Verification Agent</div>
-                <div class="feature-desc">Checks pipeline confidence and flags low-certainty cases for mandatory human review.</div>
+                <span class="feature-icon">⏳</span>
+                <div class="feature-title">Prognostic</div>
+                <div class="feature-desc">Estimates Overall Survival (OS) and Progression-Free Survival (PFS).</div>
             </div>
             <div class="feature-tile">
                 <span class="feature-icon">🎯</span>
-                <div class="feature-title">Grad-CAM Heatmap</div>
-                <div class="feature-desc">Shows exactly which region of the scan drove the model's conclusion — full explainability.</div>
+                <div class="feature-title">Visual Proof</div>
+                <div class="feature-desc">Live streaming dashboard showing every agent's input and output.</div>
             </div>
         </div>
 
@@ -184,16 +152,12 @@ def _render_landing() -> None:
             <span style="font-size:0.65rem;color:#475569;font-weight:700;
                          text-transform:uppercase;letter-spacing:0.12em;margin-right:0.4rem;">Pipeline</span>
             <span class="pipeline-node">👁️ Vision</span>
-            <span class="pipeline-arrow">+</span>
-            <span class="pipeline-node">🧬 Clinical</span>
-            <span class="pipeline-arrow">+</span>
-            <span class="pipeline-node">📚 RAG</span>
             <span class="pipeline-arrow">→</span>
-            <span class="pipeline-node">📝 Report</span>
+            <span class="pipeline-node">🧫 Classification</span>
             <span class="pipeline-arrow">→</span>
-            <span class="pipeline-node">🛡️ Verify</span>
+            <span class="pipeline-node">🧬 Genomics</span>
             <span class="pipeline-arrow">→</span>
-            <span class="pipeline-node">🎯 Explain</span>
+            <span class="pipeline-node">👨‍⚕️ Oncologist</span>
         </div>
         """,
         unsafe_allow_html=True,
@@ -249,7 +213,7 @@ def _render_header() -> None:
         <div class="main-header">
             <span class="main-header-icon">🧠</span>
             <h1 class="main-header-title">NeuroAgent</h1>
-            <div class="main-header-sub">Multi-Agent AI System for Brain MRI Diagnosis Support</div>
+            <div class="main-header-sub">Live Visual Proof Execution Dashboard</div>
             <div style="margin-top:0.75rem;display:inline-flex;align-items:center;gap:0.4rem;
                         background:rgba(12,20,40,0.6);border:1px solid rgba(99,102,241,0.15);
                         border-radius:20px;padding:0.25rem 0.9rem;font-size:0.68rem;color:#64748b;">
@@ -280,69 +244,13 @@ def main() -> None:
     with col_controls:
         scan_file, patient_data, run_clicked = render_upload_panel()
 
-    # ── Track file changes — reset results on new upload ──────────────────────
-    if scan_file is not None:
-        fp = _file_fingerprint(scan_file)
-        if st.session_state.get("last_file_id") != fp:
-            for key in ("result", "scan_bytes", "scan_name", "error_msg"):
-                st.session_state.pop(key, None)
-            st.session_state["last_file_id"] = fp
-
     # ── Handle Run button click ───────────────────────────────────────────────
-    if run_clicked and scan_file is not None:
-        st.session_state.pop("error_msg", None)
-        with col_results:
-            with st.spinner("🧠  Running NeuroAgent pipeline…"):
-                t0 = time.time()
-                try:
-                    result = _call_analyze_api(scan_file, patient_data)
-                    st.session_state["result"]     = result
-                    st.session_state["scan_bytes"] = scan_file.getvalue()
-                    st.session_state["scan_name"]  = scan_file.name
-                    elapsed = time.time() - t0
-                    logger.info(
-                        "Analysis complete | conf=%.2f | label=%s | time=%.1fs",
-                        result.get("confidence", 0),
-                        result.get("confidence_label"),
-                        elapsed,
-                    )
-                    st.rerun()
-
-                except requests.ConnectionError:
-                    st.session_state["error_msg"] = (
-                        f"Cannot connect to the backend at {BACKEND_URL}.\n"
-                        "Please start: uvicorn backend.main:app --reload"
-                    )
-                except requests.Timeout:
-                    st.session_state["error_msg"] = (
-                        f"Request timed out after {REQUEST_TIMEOUT}s. Try again."
-                    )
-                except requests.HTTPError as exc:
-                    try:
-                        detail = exc.response.json().get("detail", str(exc))
-                    except Exception:
-                        detail = str(exc)
-                    st.session_state["error_msg"] = (
-                        f"Backend error ({exc.response.status_code}): {detail}"
-                    )
-                except Exception as exc:
-                    st.session_state["error_msg"] = f"Unexpected error: {exc}"
-
-    # ── Right column: results or landing page ─────────────────────────────────
     with col_results:
-        if "error_msg" in st.session_state and st.session_state["error_msg"]:
-            _render_error(st.session_state["error_msg"])
-
-        if "result" in st.session_state:
-            render_results(
-                api_response=st.session_state["result"],
-                scan_bytes=st.session_state["scan_bytes"],
-                scan_filename=st.session_state["scan_name"],
-            )
+        if run_clicked and scan_file is not None:
+            # Render the streaming live dashboard directly!
+            render_live_dashboard(scan_file, patient_data, ANALYZE_URL)
         else:
             _render_landing()
-
-
 
 if __name__ == "__main__":
     main()

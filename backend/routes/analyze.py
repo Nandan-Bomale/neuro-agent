@@ -162,20 +162,8 @@ async def _save_upload_to_temp(upload: UploadFile, suffix: str) -> Path:
 
 @router.post(
     "/analyze",
-    response_model=AnalysisResponse,
-    responses={
-        400: {"model": ErrorResponse, "description": "Invalid file type or missing fields"},
-        413: {"model": ErrorResponse, "description": "Upload too large"},
-        422: {"model": ErrorResponse, "description": "Patient data validation error"},
-        500: {"model": ErrorResponse, "description": "Pipeline error"},
-    },
-    summary="Analyse a brain MRI scan",
-    description=(
-        "Upload an MRI scan file and patient metadata (as JSON string). "
-        "The pipeline runs all seven agents — Vision, Clinical History, RAG Literature, "
-        "Report Generation, Verification, and Explainability — and returns a structured "
-        "radiology report with a base64 Grad-CAM heatmap image."
-    ),
+    summary="Analyse a brain MRI scan (Streaming SSE)",
+    description="Streams execution events (AgentExecutionEvent) in real-time as Server-Sent Events.",
     operation_id="analyze_mri",
 )
 async def analyze(
@@ -186,94 +174,47 @@ async def analyze(
     ],
     patient_json: Annotated[
         str,
-        Form(
-            description=(
-                "JSON string encoding the PatientData schema. "
-                'Example: {"age": 45, "sex": "M", "symptoms": ["headache"], '
-                '"medical_history": [], "medications": [], "referring_notes": "", '
-                '"scan_modality": "FLAIR"}'
-            )
-        ),
+        Form(description="JSON string encoding the PatientData schema.")
     ],
-) -> AnalysisResponse:
-    """
-    POST /api/analyze
-
-    Accepts multipart/form-data with:
-      - scan_file     : UploadFile
-      - patient_json  : str (JSON-encoded PatientData)
-
-    Returns AnalysisResponse on success.
-    """
+):
     run_id = str(uuid.uuid4())
     logger.info(
-        "POST /analyze | run_id=%s | file='%s' | size=%s",
+        "POST /analyze (stream) | run_id=%s | file='%s' | size=%s",
         run_id,
         scan_file.filename,
         scan_file.size,
     )
 
-    # ── 1. Validate file extension ────────────────────────────────────────────
     if not scan_file.filename:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No filename provided in upload.",
-        )
+        raise HTTPException(status_code=400, detail="No filename provided in upload.")
     suffix = _validate_file_extension(scan_file.filename)
 
-    # ── 2. Parse + validate patient JSON ─────────────────────────────────────
     try:
         patient_dict = json.loads(patient_json)
     except json.JSONDecodeError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"patient_json is not valid JSON: {exc}",
-        ) from exc
+        raise HTTPException(status_code=400, detail=f"patient_json is not valid JSON: {exc}")
 
     try:
         patient_data = PatientData.model_validate(patient_dict)
     except ValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Patient data validation failed: {exc.errors()}",
-        ) from exc
+        raise HTTPException(status_code=422, detail=f"Validation failed: {exc.errors()}")
 
-    # ── 3. Save upload to temp file ───────────────────────────────────────────
-    temp_path: Path | None = None
-    try:
-        temp_path = await _save_upload_to_temp(scan_file, suffix)
+    temp_path = await _save_upload_to_temp(scan_file, suffix)
+    pipeline = request.app.state.pipeline
 
-        # ── 4. Run the pipeline ───────────────────────────────────────────────
-        pipeline = request.app.state.pipeline
-        result: AnalysisResponse = await pipeline.run(
-            scan_path=str(temp_path),
-            patient_data=patient_data.to_pipeline_dict(),
-            run_id=run_id,
-        )
-
-        logger.info(
-            "POST /analyze complete | run_id=%s | confidence=%.3f | status=%s | time=%.2fs",
-            run_id,
-            result.confidence,
-            result.pipeline_status,
-            result.processing_time_s,
-        )
-        return result
-
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.exception("Pipeline error | run_id=%s | %s", run_id, exc)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Pipeline failed: {exc}",
-        ) from exc
-
-    finally:
-        # ── 5. Always clean up the temp file ─────────────────────────────────
-        if temp_path is not None:
-            try:
+    # Create an async generator to feed the StreamingResponse
+    async def event_generator():
+        try:
+            async for event in pipeline.stream_run(
+                scan_path=str(temp_path),
+                patient_data=patient_data.to_pipeline_dict(),
+                run_id=run_id
+            ):
+                yield event
+        finally:
+            if temp_path and temp_path.exists():
                 temp_path.unlink(missing_ok=True)
                 logger.debug("Cleaned up temp file: %s", temp_path)
-            except Exception as cleanup_exc:
-                logger.warning("Failed to clean up temp file %s: %s", temp_path, cleanup_exc)
+
+    from fastapi.responses import StreamingResponse
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
