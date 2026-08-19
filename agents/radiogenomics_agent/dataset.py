@@ -112,19 +112,34 @@ class RadiogenomicsDataset(Dataset):
         
         self.samples = []
         for _, row in self.df.iterrows():
-            subject_id = str(row["BraTS21ID"])
-            # In BraTS21, IDs are often zero-padded to 5 digits, e.g. "00001"
-            subject_id = subject_id.zfill(5)
-            
-            subject_dir = self.data_dir / subject_id
-            if not subject_dir.exists():
-                subject_dir = self.data_dir / f"BraTS2021_{subject_id}"
-            
+            # Check if this is a UCSF-PDGM row or BraTS row
+            if "BraTS21ID" in row:
+                subject_id = str(row["BraTS21ID"]).zfill(5)
+                subject_dir = self.data_dir / subject_id
+                if not subject_dir.exists():
+                    subject_dir = self.data_dir / f"BraTS2021_{subject_id}"
+                idh_val = row.get("IDH_value", 0.0)
+                mgmt_val = row.get("MGMT_value", 0.0)
+            elif "ID" in row: # UCSF format
+                subject_id = str(row["ID"]) # e.g. UCSF-PDGM-0004
+                # UCSF folders look like UCSF-PDGM-0004_nifti
+                subject_dir = self.data_dir / "UCSF-PDGM" / f"{subject_id}_nifti"
+                
+                # Parse IDH: 'Mutant' -> 1.0, 'Wildtype' -> 0.0
+                idh_raw = str(row.get("IDH", "")).lower()
+                idh_val = 1.0 if "mutant" in idh_raw else 0.0
+                
+                # Parse MGMT: 'Methylated' -> 1.0, 'Unmethylated' -> 0.0
+                mgmt_raw = str(row.get("MGMT status", "")).lower()
+                mgmt_val = 1.0 if "methylated" in mgmt_raw and "unmethylated" not in mgmt_raw else 0.0
+            else:
+                continue
+
             if not subject_dir.exists():
                 warnings.warn(f"Subject dir not found for {subject_id}")
                 continue
                 
-            # Locate modalities
+            # Locate modalities (using rglob for nested UCSF folders)
             paths = {}
             dicom_mappings = {
                 "flair": "FLAIR",
@@ -132,11 +147,23 @@ class RadiogenomicsDataset(Dataset):
                 "t1ce": "T1wCE",
                 "t2": "T2w"
             }
+            # UCSF specific keywords
+            ucsf_mappings = {
+                "flair": "FLAIR",
+                "t1": "T1_bias",
+                "t1ce": "T1gad",
+                "t2": "T2_bias"
+            }
+
             for mod in MODALITY_KEYS:
-                matches = list(subject_dir.glob(f"*{mod}*.nii.gz"))
-                if not matches:
-                    matches = list(subject_dir.glob(f"*{mod}*.nii"))
+                # 1. Try standard BraTS name directly
+                matches = list(subject_dir.rglob(f"*{mod}*.nii.gz")) + list(subject_dir.rglob(f"*{mod}*.nii"))
                 
+                # 2. Try UCSF specific name if standard not found
+                if not matches and "UCSF" in subject_id:
+                    ucsf_mod = ucsf_mappings.get(mod, mod)
+                    matches = list(subject_dir.rglob(f"*{ucsf_mod}*.nii.gz")) + list(subject_dir.rglob(f"*{ucsf_mod}*.nii"))
+
                 if matches:
                     paths[mod] = str(matches[0])
                 else:
@@ -147,12 +174,12 @@ class RadiogenomicsDataset(Dataset):
             if len(paths) == 4:
                 item = {
                     **paths, 
-                    "idh": float(row.get("IDH_value", 0.0)), 
-                    "mgmt": float(row.get("MGMT_value", 0.0))
+                    "idh": float(idh_val), 
+                    "mgmt": float(mgmt_val)
                 }
                 self.samples.append(item)
             else:
-                warnings.warn(f"Missing modalities for {subject_id}")
+                warnings.warn(f"Missing modalities for {subject_id}. Found: {list(paths.keys())}")
                 
         print(f"[RadiogenomicsDataset] Found {len(self.samples)} complete samples.")
 
