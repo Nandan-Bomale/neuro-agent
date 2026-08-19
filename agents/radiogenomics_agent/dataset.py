@@ -113,17 +113,22 @@ class RadiogenomicsDataset(Dataset):
         self.samples = []
         for _, row in self.df.iterrows():
             # Check if this is a UCSF-PDGM row or BraTS row
-            if "BraTS21ID" in row:
-                subject_id = str(row["BraTS21ID"]).zfill(5)
+            if "BraTS21ID" in row and pd.notna(row["BraTS21ID"]):
+                # Pandas might cast to float if there are NaNs, so convert to int first
+                try:
+                    subject_id = str(int(row["BraTS21ID"])).zfill(5)
+                except ValueError:
+                    subject_id = str(row["BraTS21ID"]).zfill(5)
+                    
                 subject_dir = self.data_dir / subject_id
                 if not subject_dir.exists():
                     subject_dir = self.data_dir / f"BraTS2021_{subject_id}"
                 idh_val = row.get("IDH_value", 0.0)
                 mgmt_val = row.get("MGMT_value", 0.0)
-            elif "ID" in row: # UCSF format
+            elif "ID" in row and pd.notna(row["ID"]): # UCSF format
                 subject_id = str(row["ID"]) # e.g. UCSF-PDGM-0004
                 # UCSF folders look like UCSF-PDGM-0004_nifti
-                subject_dir = self.data_dir / "UCSF-PDGM" / f"{subject_id}_nifti"
+                subject_dir = self.data_dir / "UCSF-PDGM" / "UCSF-PDGM" / f"{subject_id}_nifti"
                 
                 # Parse IDH: 'Mutant' -> 1.0, 'Wildtype' -> 0.0
                 idh_raw = str(row.get("IDH", "")).lower()
@@ -136,7 +141,7 @@ class RadiogenomicsDataset(Dataset):
                 continue
 
             if not subject_dir.exists():
-                warnings.warn(f"Subject dir not found for {subject_id}")
+                warnings.warn(f"Subject dir not found for {subject_id} at {subject_dir}")
                 continue
                 
             # Locate modalities (using rglob for nested UCSF folders)
