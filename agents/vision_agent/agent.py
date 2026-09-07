@@ -103,6 +103,7 @@ class VisionAgentResult:
     tumour_volume_voxels: int
     gradcam_slice:        int
     requires_review:      bool
+    mri_slice_path:       Optional[str] = None
     inference_time_s:     float = field(default=0.0)
 
     def summary(self) -> str:
@@ -143,6 +144,7 @@ class VisionAgentResult:
             "tumour_volume_cc":     round(self.tumour_volume_voxels / 1000.0, 2),
             "requires_review":      self.requires_review,
             "gradcam_slice":        self.gradcam_slice,
+            "mri_slice_path":       self.mri_slice_path,
             "inference_time_s":     round(self.inference_time_s, 2),
         }
 
@@ -217,10 +219,7 @@ class VisionAgent:
 
     def run(
         self,
-        flair_path:    str,
-        t1_path:       str,
-        t1ce_path:     str,
-        t2_path:       str,
+        mri_scan_path: str,
         target_slice:  Optional[int] = None,
         modality_idx:  int = 0,
     ) -> VisionAgentResult:
@@ -233,13 +232,10 @@ class VisionAgent:
           4. Package everything into a VisionAgentResult
 
         Args:
-            flair_path:   Path to FLAIR modality NIfTI (.nii or .nii.gz).
-            t1_path:      Path to T1    modality NIfTI.
-            t1ce_path:    Path to T1ce  modality NIfTI.
-            t2_path:      Path to T2    modality NIfTI.
-            target_slice: Axial slice index for the Grad-CAM overlay.
-                          If None, the most salient slice is chosen automatically.
-            modality_idx: MRI channel used as the overlay background (0=FLAIR).
+            mri_scan_path: Path to the NIfTI MRI file (3D or 4D).
+            target_slice:  Axial slice index for the Grad-CAM overlay.
+                           If None, the most salient slice is chosen automatically.
+            modality_idx:  MRI channel used as the overlay background (0=FLAIR).
 
         Returns:
             VisionAgentResult — fully populated result object.
@@ -251,10 +247,7 @@ class VisionAgent:
 
         # ── Step 1 + 2: Inference (predict handles preprocessing internally) ─
         inference_result = predict(
-            flair_path      = flair_path,
-            t1_path         = t1_path,
-            t1ce_path       = t1ce_path,
-            t2_path         = t2_path,
+            mri_scan_path   = mri_scan_path,
             checkpoint_path = self.checkpoint_path,
             device          = self.device,
         )
@@ -262,15 +255,13 @@ class VisionAgent:
         # ── Step 3: Grad-CAM ─────────────────────────────────────────────────
         print("[VisionAgent] Generating Grad-CAM heatmap...")
 
-        # Re-run preprocessing to get the tensor (inference already did this
-        # internally, but we need the tensor again for Grad-CAM)
+        # Re-run preprocessing to get the tensor
+        from agents.vision_agent.transforms import get_single_inference_transforms
         data_dict = {
-            "flair": flair_path,
-            "t1":    t1_path,
-            "t1ce":  t1ce_path,
-            "t2":    t2_path,
+            "image": mri_scan_path,
         }
-        processed     = self._transforms(data_dict)
+        transforms = get_single_inference_transforms()
+        processed     = transforms(data_dict)
         image_tensor  = processed["image"].unsqueeze(0).to(self.device)
 
         gradcam_result = self._gradcam.generate(
@@ -278,6 +269,42 @@ class VisionAgent:
             target_slice = target_slice,
             modality_idx = modality_idx,
         )
+
+        # ── Extract and Save the 2D Slice for Tumor Classification ───────────
+        # FIX: The classifier was trained on raw 240x240 BraTS slices without Z-score normalization.
+        # We must load the raw NIfTI file, min-max scale the slice, and save it.
+        import nibabel as nib
+        import os
+        from PIL import Image
+        
+        nii = nib.load(mri_scan_path)
+        raw_vol = nii.get_fdata()
+        
+        # Take the middle slice of the Z-axis (or target_s if we can map it)
+        # target_s is in cropped/resampled space. Let's just use the middle of the original volume.
+        # Most tumors span the middle slices.
+        slice_idx = raw_vol.shape[2] // 2
+        
+        raw_slice = raw_vol[:, :, slice_idx].astype(np.float32)
+        
+        # Standard min-max scaling to 0-255 just like in training
+        slice_max = float(raw_slice.max())
+        if slice_max > 0.0:
+            raw_slice = raw_slice / slice_max
+        raw_slice = (raw_slice * 255).astype(np.uint8)
+        
+        # Rotate 90 degrees to make it match kaggle_3m standard orientation if needed
+        # BraTS NIfTI is usually rotated 90 deg clockwise compared to standard JPGs
+        raw_slice = np.rot90(raw_slice)
+        
+        slice_dir = Path("data/interim/extracted_slices")
+        slice_dir.mkdir(parents=True, exist_ok=True)
+        slice_name = f"extracted_slice_{int(time.time())}.jpg"
+        slice_path = slice_dir / slice_name
+        
+        img = Image.fromarray(raw_slice, mode="L").convert("RGB")
+        img.save(slice_path)
+        print(f"[VisionAgent] Saved 2D RAW slice for classification: {slice_path}")
 
         # ── Step 4: Package result ───────────────────────────────────────────
         confidence   = inference_result["confidence_score"]
@@ -293,6 +320,7 @@ class VisionAgent:
             tumour_volume_voxels = inference_result["tumour_volume_voxels"],
             gradcam_slice        = gradcam_result["target_slice"],
             requires_review      = confidence < self.review_threshold,
+            mri_slice_path       = str(slice_path),
             inference_time_s     = elapsed,
         )
 

@@ -1,3 +1,13 @@
+---
+title: NeuroAgent
+emoji: 🧠
+colorFrom: indigo
+colorTo: purple
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # 🧠 NeuroAgent
 ### A Multi-Agent AI System for Brain MRI Diagnosis Support
 

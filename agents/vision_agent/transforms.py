@@ -299,3 +299,30 @@ def get_inference_transforms() -> Compose:
     """
     base = _shared_load_and_preprocess(include_label=False)
     return Compose(base)
+
+
+def _duplicate_channels(img):
+    import torch
+    if img.shape[0] == 1:
+        return img.repeat(4, 1, 1, 1)
+    return img
+
+def get_single_inference_transforms() -> Compose:
+    """Build the inference transform pipeline for a single 3D or 4D NIfTI file.
+    
+    Expected data dict keys:
+        image  → str path to the NIfTI file
+        
+    After this pipeline the dict will contain:
+        image  → FloatTensor [4, H, W, D]
+    """
+    return Compose([
+        LoadImaged(keys=["image"], image_only=True, ensure_channel_first=False),
+        EnsureChannelFirstd(keys=["image"]),
+        Lambdad(keys=["image"], func=_duplicate_channels),
+        Spacingd(keys=["image"], pixdim=PIXDIM, mode=("bilinear",)),
+        Orientationd(keys=["image"], axcodes="RAS"),
+        NormalizeIntensityd(keys=["image"], nonzero=True, channel_wise=True),
+        CropForegroundd(keys=["image"], source_key="image", allow_smaller=True),
+        EnsureTyped(keys=["image"], dtype="float32"),
+    ])

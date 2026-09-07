@@ -1,83 +1,16 @@
-# =============================================================================
-# .dockerignore — project root
-# =============================================================================
-# Files and directories excluded from the Docker build context.
-# Keeping the context small speeds up `docker build` and prevents secrets
-# from leaking into image layers.
-# =============================================================================
-
-# ── Virtual environments ───────────────────────────────────────────────────────
-venv/
-.venv/
-env/
-.env/
-**/venv/
-**/.venv/
-
-# ── Python bytecode & caches ──────────────────────────────────────────────────
-__pycache__/
-**/__pycache__/
+__pycache__
 *.pyc
 *.pyo
 *.pyd
-.Python
-
-# ── Large raw data (mounted as volumes at runtime) ────────────────────────────
-data/raw/
-data/processed/
-
-# ── Model weights (mounted as volumes at runtime) ─────────────────────────────
-models/*/weights/
-models/*/checkpoints/
-models/llm/
-*.pth
-*.pt
-*.bin
-*.safetensors
-*.gguf
-
-# ── NIfTI / medical image files (large, mount at runtime) ────────────────────
-*.nii
-*.nii.gz
-*.dcm
-
-# ── Secrets ───────────────────────────────────────────────────────────────────
-.env
-.env.*
-!.env.example         # allow the example template into the context
-
-# ── Git ───────────────────────────────────────────────────────────────────────
-.git/
+.git
 .gitignore
-.gitattributes
-
-# ── Editor / OS artifacts ─────────────────────────────────────────────────────
-.idea/
-.vscode/
-*.swp
-*.swo
-.DS_Store
-Thumbs.db
-desktop.ini
-
-# ── Test & CI artifacts ───────────────────────────────────────────────────────
-.pytest_cache/
-.coverage
-htmlcov/
-dist/
-build/
-*.egg-info/
-
-# ── Notebooks ─────────────────────────────────────────────────────────────────
-notebooks/
-*.ipynb
-.ipynb_checkpoints/
-
-# ── Logs ──────────────────────────────────────────────────────────────────────
+venv/
+env/
+.venv/
+node_modules/
+frontend_react/node_modules/
+*.zip
 *.log
-logs/
-
-# ── Temporary files ───────────────────────────────────────────────────────────
-tmp/
-temp/
+scratch*.py
 scratch/
+backups/

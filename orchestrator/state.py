@@ -59,6 +59,9 @@ class NeuroAgentState(TypedDict, total=False):
     mri_scan_path: str
     """Absolute or relative path to the NIfTI MRI scan file."""
 
+    mri_slice_path: Optional[str]
+    """Path to the extracted 2D slice for Tumor Classification Agent."""
+
     patient_data: dict[str, Any]
     """
     Structured patient metadata dict. Expected keys (non-exhaustive):
@@ -83,15 +86,29 @@ class NeuroAgentState(TypedDict, total=False):
     error_message: Optional[str]
     """Human-readable error description if pipeline_status == 'error'."""
 
+    # ── Emergency Agent output ────────────────────────────────────────────────
+    emergency_findings: dict[str, Any]
+    """
+    Output from EmergencyAgent.run(). Expected keys:
+      - midline_shift_detected: bool
+      - midline_shift_image_path: str
+      - urgency_upgrade: str
+    """
+
+    # ── Localization Agent output ─────────────────────────────────────────────
+    localization_findings: dict[str, Any]
+    """
+    Output from LocalizationAgent.run(). Expected keys:
+      - predicted_lobe: str
+      - bounding_box: tuple
+    """
+
     # ── Vision Agent output ───────────────────────────────────────────────────
     vision_findings: dict[str, Any]
     """
-    Output from VisionAgent.run(). Expected keys:
-      - confidence: float            — primary confidence score [0.0, 1.0]
-      - detected_regions: list[dict] — bounding boxes / contours per region
-      - segmentation_mask_path: str  — path to saved binary mask image
-      - prediction_label: str        — e.g. "tumour_detected" | "no_tumour"
-      - model_version: str           — e.g. "unet-monai-v1"
+    Output from Vision2DAgent.run(). Expected keys:
+      - tumor_area_cm2: float
+      - segmentation_mask_path: str
     """
 
     # ── Tumor Classification Agent output ──────────────────────────────────────
@@ -107,40 +124,37 @@ class NeuroAgentState(TypedDict, total=False):
       - tta_used: bool              — True if Test-Time Augmentation was applied
     """
 
-    # ── Clinical History Agent output ─────────────────────────────────────────
-    clinical_analysis: dict[str, Any]
+    # ── Surgical Planning Agent output ────────────────────────────────────────
+    surgical_analysis: dict[str, Any]
     """
-    Output from ClinicalHistoryAgent.run(). Expected keys:
-      - history_summary: str        — concise clinical narrative
-      - risk_factors: list[str]     — identified risk factors
-      - clinical_fit_score: float   — how well history fits findings [0.0, 1.0]
-      - reasoning: str              — LLM reasoning chain
+    Output from SurgicalAgent.run(). Expected keys:
+      - resectability_score: float  — e.g., 0.85
+      - surgical_recommendation: str
     """
 
-    # ── RAG Literature Agent output ───────────────────────────────────────────
-    literature_results: list[dict[str, Any]]
+    # ── Prognostic Agent output ───────────────────────────────────────────────
+    prognostic_analysis: dict[str, Any]
     """
-    Output from RAGLiteratureAgent.run(). List of retrieved papers.
-    Each item contains:
-      - title: str
-      - abstract: str
-      - authors: list[str]
-      - year: int
-      - pmid: str          — PubMed ID
-      - relevance_score: float
-      - citation: str      — formatted citation string
+    Output from PrognosticAgent.run(). Expected keys:
+      - overall_survival_months: float
+      - progression_free_survival_months: float
     """
 
-    # ── Report Generation Agent output ────────────────────────────────────────
-    report: dict[str, Any]
+    # ── Clinical Trial Agent output ───────────────────────────────────────────
+    clinical_trials: list[dict[str, Any]]
     """
-    Output from ReportGenerationAgent.run(). Structured radiology report.
+    Output from ClinicalTrialAgent.run(). List of relevant trials from clinicaltrials.gov.
+    """
+
+    # ── Neuro-Oncologist Agent output ─────────────────────────────────────────
+    neuro_oncologist_plan: dict[str, Any]
+    """
+    Output from NeuroOncologistAgent.run(). The final treatment plan based on NCCN guidelines.
     Expected keys:
-      - findings: str           — description of what was found
-      - impression: str         — radiologist-style summary and conclusion
-      - recommendations: str    — suggested next steps (biopsy, follow-up, etc.)
-      - cited_literature: list  — references used from literature_results
-      - generated_at: str       — ISO timestamp
+      - treatment_recommendation: str
+      - chemotherapy_protocol: str
+      - radiotherapy_protocol: str
+      - generated_at: str
     """
 
     overall_confidence: float
@@ -148,7 +162,7 @@ class NeuroAgentState(TypedDict, total=False):
     Aggregated confidence score produced by the Report Agent [0.0, 1.0].
     Combines vision confidence + clinical fit score.
     Used by VerificationAgent as the primary signal.
-    Falls back to vision_findings['confidence'] if not set.
+    Falls back to tumor_classification_findings['confidence'] if not set.
     """
 
     # ── Verification Agent output (see agents/verification_agent/agent.py) ────
@@ -180,7 +194,7 @@ class NeuroAgentState(TypedDict, total=False):
 
 
 def create_initial_state(
-    mri_scan_path: str,
+    mri_slice_path: str,
     patient_data: dict[str, Any],
     run_id: str | None = None,
 ) -> NeuroAgentState:
@@ -191,22 +205,15 @@ def create_initial_state(
     start absent (not None) — LangGraph merges them in as agents run.
 
     Args:
-        mri_scan_path: Path to the NIfTI MRI file.
+        mri_slice_path: Path to the 2D MRI file (JPG/PNG).
         patient_data:  Dict of patient metadata (age, symptoms, history, etc.).
         run_id:        Optional run identifier. Auto-generated UUID4 if omitted.
 
     Returns:
         A NeuroAgentState dict ready to be passed to compile_graph().invoke().
-
-    Example:
-        state = create_initial_state(
-            mri_scan_path="data/raw/patient_001.nii.gz",
-            patient_data={"age": 45, "symptoms": ["headache"]},
-        )
-        result = pipeline.invoke(state)
     """
     state: NeuroAgentState = {
-        "mri_scan_path": mri_scan_path,
+        "mri_slice_path": mri_slice_path,
         "patient_data": patient_data,
         "run_id": run_id or str(uuid.uuid4()),
         "timestamp": datetime.now(timezone.utc).isoformat(),

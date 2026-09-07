@@ -14,10 +14,11 @@ Rules:
 Integration checklist (Week 10–11):
   [x] VisionAgent          — agents/vision_agent/agent.py
   [x] TumorClassAgent      — agents/tumor_classification_agent/agent.py  ✅ DONE
-  [ ] ClinicalHistoryAgent — agents/clinical_history_agent/agent.py
-  [ ] RAGLiteratureAgent   — agents/rag_literature_agent/agent.py
-  [ ] ReportAgent          — agents/report_generation_agent/agent.py
-  [ ] ExplainabilityAgent  — agents/explainability_agent/agent.py
+  [ ] RadiogenomicsAgent   — agents/radiogenomics_agent/agent.py
+  [ ] SurgicalAgent        — agents/surgical_agent/agent.py
+  [ ] PrognosticAgent      — agents/prognostic_agent/agent.py
+  [ ] ClinicalTrialAgent   — agents/clinical_trial_agent/agent.py
+  [ ] NeuroOncologistAgent — agents/neuro_oncologist_agent/agent.py
   [x] VerificationAgent    — agents/verification_agent/agent.py  ✅ DONE
 """
 
@@ -45,33 +46,51 @@ def _not_yet_implemented(agent_name: str, module_path: str) -> RuntimeError:
 # ── Agent nodes ────────────────────────────────────────────────────────────────
 
 
-def vision_node(state: NeuroAgentState) -> dict[str, Any]:
+def preprocessing_node(state: NeuroAgentState) -> dict[str, Any]:
     """
-    Node: Vision Agent
-    Runs tumour detection + segmentation on the MRI scan.
-
-    Reads:  state["mri_scan_path"]
-    Writes: state["vision_findings"]  (dict with confidence, mask, regions, label)
+    Node: Preprocessing Agent
+    Reads:  state["mri_slice_path"]
+    Writes: state["preprocessing_findings"], state["mri_slice_path"]
     """
-    logger.info("[vision_node] Starting VisionAgent | scan=%s", state.get("mri_scan_path"))
+    logger.info("[preprocessing_node] Starting PreprocessingAgent | scan=%s", state.get("mri_slice_path"))
 
-    try:
-        from agents.vision_agent.agent import VisionAgent  # noqa: PLC0415
-    except (ImportError, AttributeError) as exc:
-        raise _not_yet_implemented(
-            "VisionAgent", "agents/vision_agent/agent.py"
-        ) from exc
-
-    agent = VisionAgent()
+    from agents.preprocessing_agent.agent import PreprocessingAgent
+    agent = PreprocessingAgent()
     result = agent.run(dict(state))
-
-    logger.info(
-        "[vision_node] Done | confidence=%.4f | label=%s",
-        result.get("vision_findings", {}).get("confidence", -1),
-        result.get("vision_findings", {}).get("prediction_label", "?"),
-    )
     return result
 
+def vision_node(state: NeuroAgentState) -> dict[str, Any]:
+    """
+    Node: Vision 2D Agent
+    Reads:  state["mri_slice_path"]
+    Writes: state["vision_findings"]
+    """
+    logger.info("[vision_node] Starting Vision2DAgent | scan=%s", state.get("mri_slice_path"))
+
+    from agents.vision_2d_agent.agent import Vision2DAgent
+    agent = Vision2DAgent()
+    result = agent.run(dict(state))
+    return result
+
+def localization_node(state: NeuroAgentState) -> dict[str, Any]:
+    """
+    Node: Localization Agent
+    """
+    logger.info("[localization_node] Starting LocalizationAgent")
+    from agents.localization_agent.agent import LocalizationAgent
+    agent = LocalizationAgent()
+    result = agent.run(dict(state))
+    return result
+
+def emergency_node(state: NeuroAgentState) -> dict[str, Any]:
+    """
+    Node: Emergency Agent
+    """
+    logger.info("[emergency_node] Starting EmergencyAgent")
+    from agents.emergency_agent.agent import EmergencyAgent
+    agent = EmergencyAgent()
+    result = agent.run(dict(state))
+    return result
 
 def tumor_classification_node(state: NeuroAgentState) -> dict[str, Any]:
     """
@@ -81,7 +100,7 @@ def tumor_classification_node(state: NeuroAgentState) -> dict[str, Any]:
     glioma GRADE (II/III/IV) with a second EfficientNet-B4.
 
     Reads:  state["vision_findings"]  (for context)
-            state["mri_scan_path"]    (for 2D slice extraction)
+            state["mri_slice_path"]   (2D slice extracted by Vision Agent)
     Writes: state["tumor_classification_findings"]
     """
     logger.info("[tumor_classification_node] Starting TumorClassificationAgent")
@@ -97,91 +116,118 @@ def tumor_classification_node(state: NeuroAgentState) -> dict[str, Any]:
     agent = TumorClassificationAgent()
     result = agent.run(dict(state))
 
+    # The agent returns {"agent_name":..., "success":..., "output": {...}, "confidence":...}
+    # We need to map its "output" sub-dict to state["tumor_classification_findings"]
+    agent_output = result.get("output", {})
+    confidence   = result.get("confidence", 0.0)
+
+    tumor_classification_findings = {
+        "tumor_type":          agent_output.get("tumor_type"),
+        "tumor_grade":         agent_output.get("tumor_grade"),
+        "type_probabilities":  agent_output.get("type_probabilities"),
+        "grade_probabilities": agent_output.get("grade_probabilities"),
+        "clinical_urgency":    agent_output.get("clinical_urgency"),
+        "confidence":          confidence,
+        "tta_used":            agent_output.get("tta_used", False),
+    }
+
     logger.info(
         "[tumor_classification_node] Done | type=%s | grade=%s | confidence=%.4f",
-        result.get("tumor_classification_findings", {}).get("tumor_type", "?"),
-        result.get("tumor_classification_findings", {}).get("tumor_grade", "N/A"),
-        result.get("tumor_classification_findings", {}).get("confidence", -1),
+        tumor_classification_findings.get("tumor_type", "?"),
+        tumor_classification_findings.get("tumor_grade", "N/A"),
+        tumor_classification_findings.get("confidence", -1),
     )
+    return {"tumor_classification_findings": tumor_classification_findings}
+
+
+def surgical_node(state: NeuroAgentState) -> dict[str, Any]:
+    """
+    Node: Surgical Planning Agent
+    Assesses resectability and eloquent area proximity.
+
+    Reads:  state["mri_scan_path"], state["vision_findings"]
+    Writes: state["surgical_analysis"]
+    """
+    logger.info("[surgical_node] Starting SurgicalAgent")
+
+    try:
+        from agents.surgical_agent.agent import SurgicalAgent  # noqa: PLC0415
+    except (ImportError, AttributeError) as exc:
+        raise _not_yet_implemented(
+            "SurgicalAgent", "agents/surgical_agent/agent.py"
+        ) from exc
+
+    agent = SurgicalAgent()
+    result = agent.run(dict(state))
     return result
 
 
-def clinical_node(state: NeuroAgentState) -> dict[str, Any]:
+def prognostic_node(state: NeuroAgentState) -> dict[str, Any]:
     """
-    Node: Clinical History Agent
-    Reasons over patient metadata and how it fits the vision findings.
+    Node: Prognostic Agent (DeepSurv)
+    Calculates overall survival and progression-free survival.
 
-    Reads:  state["patient_data"], state["vision_findings"]
-    Writes: state["clinical_analysis"]
+    Reads:  state["tumor_classification_findings"], state["radiogenomics_findings"], state["patient_data"]
+    Writes: state["prognostic_analysis"]
     """
-    logger.info("[clinical_node] Starting ClinicalHistoryAgent")
+    logger.info("[prognostic_node] Starting PrognosticAgent")
 
     try:
-        from agents.clinical_history_agent.agent import ClinicalHistoryAgent  # noqa: PLC0415
+        from agents.prognostic_agent.agent import PrognosticAgent  # noqa: PLC0415
     except (ImportError, AttributeError) as exc:
         raise _not_yet_implemented(
-            "ClinicalHistoryAgent", "agents/clinical_history_agent/agent.py"
+            "PrognosticAgent", "agents/prognostic_agent/agent.py"
         ) from exc
 
-    agent = ClinicalHistoryAgent()
+    agent = PrognosticAgent()
+    result = agent.run(dict(state))
+    return result
+
+
+def clinical_trial_node(state: NeuroAgentState) -> dict[str, Any]:
+    """
+    Node: Clinical Trial Agent
+    Scrapes clinicaltrials.gov for matched trials.
+
+    Reads:  state["tumor_classification_findings"], state["radiogenomics_findings"]
+    Writes: state["clinical_trials"]
+    """
+    logger.info("[clinical_trial_node] Starting ClinicalTrialAgent")
+
+    try:
+        from agents.clinical_trial_agent.agent import ClinicalTrialAgent  # noqa: PLC0415
+    except (ImportError, AttributeError) as exc:
+        raise _not_yet_implemented(
+            "ClinicalTrialAgent", "agents/clinical_trial_agent/agent.py"
+        ) from exc
+
+    agent = ClinicalTrialAgent()
+    result = agent.run(dict(state))
+    return result
+
+
+def neuro_oncologist_node(state: NeuroAgentState) -> dict[str, Any]:
+    """
+    Node: Neuro-Oncologist Agent (LoRA LLM)
+    Generates personalized treatment plan based on NCCN guidelines.
+
+    Reads:  state["tumor_classification_findings"], state["radiogenomics_findings"], state["prognostic_analysis"], state["surgical_analysis"]
+    Writes: state["neuro_oncologist_plan"], state["overall_confidence"]
+    """
+    logger.info("[neuro_oncologist_node] Starting NeuroOncologistAgent")
+
+    try:
+        from agents.neuro_oncologist_agent.agent import NeuroOncologistAgent  # noqa: PLC0415
+    except (ImportError, AttributeError) as exc:
+        raise _not_yet_implemented(
+            "NeuroOncologistAgent", "agents/neuro_oncologist_agent/agent.py"
+        ) from exc
+
+    agent = NeuroOncologistAgent()
     result = agent.run(dict(state))
 
     logger.info(
-        "[clinical_node] Done | clinical_fit_score=%.4f",
-        result.get("clinical_analysis", {}).get("clinical_fit_score", -1),
-    )
-    return result
-
-
-def rag_node(state: NeuroAgentState) -> dict[str, Any]:
-    """
-    Node: RAG Literature Agent
-    Retrieves relevant PubMed papers for the detected finding.
-
-    Reads:  state["vision_findings"], state["patient_data"]
-    Writes: state["literature_results"]  (list of paper dicts with citations)
-    """
-    logger.info("[rag_node] Starting RAGLiteratureAgent")
-
-    try:
-        from agents.rag_literature_agent.agent import RAGLiteratureAgent  # noqa: PLC0415
-    except (ImportError, AttributeError) as exc:
-        raise _not_yet_implemented(
-            "RAGLiteratureAgent", "agents/rag_literature_agent/agent.py"
-        ) from exc
-
-    agent = RAGLiteratureAgent()
-    result = agent.run(dict(state))
-
-    n_papers = len(result.get("literature_results", []))
-    logger.info("[rag_node] Done | papers_retrieved=%d", n_papers)
-    return result
-
-
-def report_node(state: NeuroAgentState) -> dict[str, Any]:
-    """
-    Node: Report Generation Agent (fan-in point)
-    Runs AFTER vision, clinical, and RAG all complete.
-    Combines their outputs into a structured radiology report.
-
-    Reads:  state["vision_findings"], state["clinical_analysis"],
-            state["literature_results"], state["patient_data"]
-    Writes: state["report"], state["overall_confidence"]
-    """
-    logger.info("[report_node] Starting ReportAgent (all three parallel nodes complete)")
-
-    try:
-        from agents.report_generation_agent.agent import ReportAgent  # noqa: PLC0415
-    except (ImportError, AttributeError) as exc:
-        raise _not_yet_implemented(
-            "ReportAgent", "agents/report_generation_agent/agent.py"
-        ) from exc
-
-    agent = ReportAgent()
-    result = agent.run(dict(state))
-
-    logger.info(
-        "[report_node] Done | overall_confidence=%.4f",
+        "[neuro_oncologist_node] Done | overall_confidence=%.4f",
         result.get("overall_confidence", -1),
     )
     return result
@@ -261,3 +307,5 @@ def human_review_node(state: NeuroAgentState) -> dict[str, Any]:
         "pipeline_status": "human_review_required",
         "human_review_reason": reason,
     }
+
+

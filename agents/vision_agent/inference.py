@@ -20,10 +20,7 @@ Usage
     from agents.vision_agent.inference import predict
 
     result = predict(
-        flair_path="path/to/flair.nii",
-        t1_path   ="path/to/t1.nii",
-        t1ce_path ="path/to/t1ce.nii",
-        t2_path   ="path/to/t2.nii",
+        mri_scan_path="path/to/scan.nii.gz",
         checkpoint ="c:/Neuro Agent/models/vision/best_model.pth",
     )
 
@@ -45,7 +42,7 @@ from monai.transforms import Activations, AsDiscrete
 from agents.vision_agent.model import build_unet
 from agents.vision_agent.transforms import (
     ROI_SIZE,
-    get_inference_transforms,
+    get_single_inference_transforms,
 )
 
 # ---------------------------------------------------------------------------
@@ -100,34 +97,20 @@ def _load_model(checkpoint_path: str, device: torch.device) -> torch.nn.Module:
     return model
 
 
-def _build_data_dict(
-    flair_path: str,
-    t1_path:    str,
-    t1ce_path:  str,
-    t2_path:    str,
-) -> dict:
-    """Build the MONAI-compatible data dictionary for one patient.
-
-    Keys match MODALITY_KEYS in transforms.py: flair, t1, t1ce, t2.
+def _build_single_data_dict(mri_scan_path: str) -> dict:
+    """Build the MONAI-compatible data dictionary for one patient scan.
 
     Args:
-        flair_path: Path to FLAIR modality .nii / .nii.gz file.
-        t1_path:    Path to T1    modality .nii / .nii.gz file.
-        t1ce_path:  Path to T1ce  modality .nii / .nii.gz file.
-        t2_path:    Path to T2    modality .nii / .nii.gz file.
+        mri_scan_path: Path to modality .nii / .nii.gz file.
 
     Returns:
         dict ready to pass into the inference transform pipeline.
     """
-    for path in (flair_path, t1_path, t1ce_path, t2_path):
-        if not Path(path).exists():
-            raise FileNotFoundError(f"MRI file not found: {path}")
+    if not Path(mri_scan_path).exists():
+        raise FileNotFoundError(f"MRI file not found: {mri_scan_path}")
 
     return {
-        "flair": flair_path,
-        "t1":    t1_path,
-        "t1ce":  t1ce_path,
-        "t2":    t2_path,
+        "image": mri_scan_path,
     }
 
 
@@ -161,10 +144,7 @@ def _compute_confidence(prob_map: np.ndarray, mask: np.ndarray) -> float:
 # ---------------------------------------------------------------------------
 
 def predict(
-    flair_path:      str,
-    t1_path:         str,
-    t1ce_path:       str,
-    t2_path:         str,
+    mri_scan_path:   str,
     checkpoint_path: str = "c:/Neuro Agent/models/vision/best_model.pth",
     threshold:       float = DEFAULT_THRESHOLD,
     device:          torch.device | None = None,
@@ -174,10 +154,7 @@ def predict(
     This is the function called by VisionAgent.run() in agent.py.
 
     Args:
-        flair_path:      Path to FLAIR modality NIfTI file.
-        t1_path:         Path to T1    modality NIfTI file.
-        t1ce_path:       Path to T1ce  modality NIfTI file.
-        t2_path:         Path to T2    modality NIfTI file.
+        mri_scan_path:   Path to NIfTI MRI file (3D or 4D).
         checkpoint_path: Path to trained U-Net checkpoint (.pth).
         threshold:       Sigmoid probability threshold for binarisation.
         device:          torch.device. Auto-detected if None.
@@ -211,8 +188,8 @@ def predict(
 
     # ── Load and preprocess scan ────────────────────────────────────────────
     print("[inference] Preprocessing scan...")
-    data_dict  = _build_data_dict(flair_path, t1_path, t1ce_path, t2_path)
-    transforms = get_inference_transforms()
+    data_dict  = _build_single_data_dict(mri_scan_path)
+    transforms = get_single_inference_transforms()
     processed  = transforms(data_dict)
 
     # Add batch dimension: [4, H, W, D] → [1, 4, H, W, D]

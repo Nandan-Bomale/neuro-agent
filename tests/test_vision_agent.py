@@ -99,10 +99,7 @@ def main():
 
         try:
             result = agent.run(
-                flair_path = sample["flair"],
-                t1_path    = sample["t1"],
-                t1ce_path  = sample["t1ce"],
-                t2_path    = sample["t2"],
+                mri_scan_path=sample["t1ce"]
             )
 
             # Print summary

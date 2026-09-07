@@ -30,6 +30,11 @@ Registered routes
 """
 
 from __future__ import annotations
+import os
+os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
+import sys
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
 
 import logging
 import os
@@ -155,6 +160,14 @@ app.add_middleware(
 
 app.include_router(analyze_router)
 
+# ── Static Files (Generated Visual Proof) ──────────────────────────────────────
+from pathlib import Path
+from fastapi.staticfiles import StaticFiles
+data_dir = Path("data")
+data_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/data", StaticFiles(directory=str(data_dir)), name="data")
+
+
 
 # ── Built-in endpoints ─────────────────────────────────────────────────────────
 
@@ -184,7 +197,25 @@ async def health_check():
     }
 
 
+# ── Frontend SPA Mounting ──────────────────────────────────────────────────────
+from fastapi.responses import FileResponse, RedirectResponse
+
+frontend_dist = Path("frontend_react/dist")
+if frontend_dist.exists():
+    assets_dir = frontend_dist / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="frontend_assets")
+
 @app.get("/", include_in_schema=False)
 async def root():
-    """Redirect root URL to the interactive API docs."""
+    index_file = frontend_dist / "index.html"
+    if index_file.exists():
+        return FileResponse(str(index_file))
+    return RedirectResponse(url="/docs")
+
+@app.get("/favicon.svg", include_in_schema=False)
+async def favicon():
+    fav = frontend_dist / "favicon.svg"
+    if fav.exists():
+        return FileResponse(str(fav))
     return RedirectResponse(url="/docs")
