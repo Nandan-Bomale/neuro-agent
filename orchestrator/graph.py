@@ -64,7 +64,6 @@ from typing import Any
 from langgraph.graph import END, START, StateGraph
 
 from orchestrator.nodes import (
-    radiogenomics_node,
     surgical_node,
     prognostic_node,
     clinical_trial_node,
@@ -73,7 +72,10 @@ from orchestrator.nodes import (
     human_review_node,
     tumor_classification_node,
     verification_node,
+    preprocessing_node,
     vision_node,
+    localization_node,
+    emergency_node,
 )
 from orchestrator.router import (
     ROUTE_EXPLAINABILITY,
@@ -88,9 +90,11 @@ logger = logging.getLogger(__name__)
 # Define node names once — used in both add_node() and add_edge() calls.
 # If you rename a node, change it here and nowhere else.
 
-_NODE_VISION = "vision"
 _NODE_TUMOR_CLASSIFICATION = "tumor_classification"
-_NODE_RADIOGENOMICS = "radiogenomics"
+_NODE_PREPROCESSING = "preprocessing"
+_NODE_VISION = "vision"
+_NODE_LOCALIZATION = "localization"
+_NODE_EMERGENCY = "emergency"
 _NODE_SURGICAL = "surgical"
 _NODE_PROGNOSTIC = "prognostic"
 _NODE_CLINICAL_TRIALS = "clinical_trials"
@@ -115,9 +119,11 @@ def build_graph() -> StateGraph:
     builder = StateGraph(NeuroAgentState)
 
     # ── Register nodes ─────────────────────────────────────────────────────────
-    builder.add_node(_NODE_VISION, vision_node)
     builder.add_node(_NODE_TUMOR_CLASSIFICATION, tumor_classification_node)
-    builder.add_node(_NODE_RADIOGENOMICS, radiogenomics_node)
+    builder.add_node(_NODE_PREPROCESSING, preprocessing_node)
+    builder.add_node(_NODE_VISION, vision_node)
+    builder.add_node(_NODE_LOCALIZATION, localization_node)
+    builder.add_node(_NODE_EMERGENCY, emergency_node)
     builder.add_node(_NODE_SURGICAL, surgical_node)
     builder.add_node(_NODE_PROGNOSTIC, prognostic_node)
     builder.add_node(_NODE_CLINICAL_TRIALS, clinical_trial_node)
@@ -127,10 +133,12 @@ def build_graph() -> StateGraph:
     builder.add_node(_NODE_HUMAN_REVIEW, human_review_node)
 
     # ── Edges: strictly sequential pipeline ────────────────────────────────────
-    builder.add_edge(START, _NODE_VISION)
+    builder.add_edge(START, _NODE_PREPROCESSING)
+    builder.add_edge(_NODE_PREPROCESSING, _NODE_VISION)
     builder.add_edge(_NODE_VISION, _NODE_TUMOR_CLASSIFICATION)
-    builder.add_edge(_NODE_TUMOR_CLASSIFICATION, _NODE_RADIOGENOMICS)
-    builder.add_edge(_NODE_RADIOGENOMICS, _NODE_SURGICAL)
+    builder.add_edge(_NODE_TUMOR_CLASSIFICATION, _NODE_LOCALIZATION)
+    builder.add_edge(_NODE_LOCALIZATION, _NODE_EMERGENCY)
+    builder.add_edge(_NODE_EMERGENCY, _NODE_SURGICAL)
     builder.add_edge(_NODE_SURGICAL, _NODE_PROGNOSTIC)
     builder.add_edge(_NODE_PROGNOSTIC, _NODE_CLINICAL_TRIALS)
     builder.add_edge(_NODE_CLINICAL_TRIALS, _NODE_NEURO_ONCOLOGIST)
@@ -180,7 +188,7 @@ def compile_graph():
 
 
 def run_pipeline(
-    mri_scan_path: str,
+    mri_slice_path: str,
     patient_data: dict[str, Any],
     run_id: str | None = None,
     async_mode: bool = False,
@@ -192,7 +200,7 @@ def run_pipeline(
     LangGraph setup internally — callers don't need to know about StateGraph.
 
     Args:
-        mri_scan_path: Path to the NIfTI MRI scan file.
+        mri_slice_path: Path to the 2D MRI scan file.
         patient_data:  Dict of patient metadata (age, symptoms, history, etc.).
         run_id:        Optional run ID for tracing. Auto-generated if omitted.
         async_mode:    If True, use graph.ainvoke() for true parallel execution
@@ -215,11 +223,11 @@ def run_pipeline(
     logger.info(
         "run_pipeline() start | run_id=%s | scan=%s",
         _run_id,
-        mri_scan_path,
+        mri_slice_path,
     )
 
     initial_state = create_initial_state(
-        mri_scan_path=mri_scan_path,
+        mri_slice_path=mri_slice_path,
         patient_data=patient_data,
         run_id=_run_id,
     )

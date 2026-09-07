@@ -1,3 +1,5 @@
+import os
+os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 """
 train.py
 --------
@@ -179,7 +181,7 @@ def _build_parser():
     p.add_argument("--epochs",      type=int,   default=100,  help="Max training epochs (early stopping may end sooner)")
     p.add_argument("--batch-size",  type=int,   default=4,    help="Batch size (4 is safe for 3D volumes on DGX)")
     p.add_argument("--lr",          type=float, default=1e-4, help="Learning rate")
-    p.add_argument("--num-workers", type=int,   default=8,    help="Dataloader workers")
+    p.add_argument("--num-workers", type=int,   default=0,    help="Dataloader workers")
     p.add_argument("--save-dir",    type=str,   default="models/radiogenomics/", help="Save directory")
     p.add_argument("--patience",    type=int,   default=10,   help="Early stopping patience (epochs without improvement)")
     p.add_argument("--seed",        type=int,   default=42,   help="Random seed")

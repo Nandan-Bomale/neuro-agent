@@ -26,6 +26,10 @@ import sys
 import os
 from pathlib import Path
 
+# Fix Windows console emoji encoding issues
+if sys.platform.startswith('win'):
+    sys.stdout.reconfigure(encoding='utf-8')
+
 # ── Add project root to path ──────────────────────────────────────────────────
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -57,7 +61,7 @@ def run_smoke_test(mri_path: str, patient_data: dict) -> None:
     try:
         print("[TEST] Running full pipeline...\n")
         result = run_pipeline(
-            mri_scan_path = mri_path,
+            mri_slice_path = mri_path,
             patient_data  = patient_data,
         )
     except Exception as e:

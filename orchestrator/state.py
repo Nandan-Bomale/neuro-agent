@@ -86,15 +86,29 @@ class NeuroAgentState(TypedDict, total=False):
     error_message: Optional[str]
     """Human-readable error description if pipeline_status == 'error'."""
 
+    # ── Emergency Agent output ────────────────────────────────────────────────
+    emergency_findings: dict[str, Any]
+    """
+    Output from EmergencyAgent.run(). Expected keys:
+      - midline_shift_detected: bool
+      - midline_shift_image_path: str
+      - urgency_upgrade: str
+    """
+
+    # ── Localization Agent output ─────────────────────────────────────────────
+    localization_findings: dict[str, Any]
+    """
+    Output from LocalizationAgent.run(). Expected keys:
+      - predicted_lobe: str
+      - bounding_box: tuple
+    """
+
     # ── Vision Agent output ───────────────────────────────────────────────────
     vision_findings: dict[str, Any]
     """
-    Output from VisionAgent.run(). Expected keys:
-      - confidence: float            — primary confidence score [0.0, 1.0]
-      - detected_regions: list[dict] — bounding boxes / contours per region
-      - segmentation_mask_path: str  — path to saved binary mask image
-      - prediction_label: str        — e.g. "tumour_detected" | "no_tumour"
-      - model_version: str           — e.g. "unet-monai-v1"
+    Output from Vision2DAgent.run(). Expected keys:
+      - tumor_area_cm2: float
+      - segmentation_mask_path: str
     """
 
     # ── Tumor Classification Agent output ──────────────────────────────────────
@@ -110,20 +124,12 @@ class NeuroAgentState(TypedDict, total=False):
       - tta_used: bool              — True if Test-Time Augmentation was applied
     """
 
-    # ── Radiogenomics Agent output ────────────────────────────────────────────
-    radiogenomics_findings: dict[str, Any]
-    """
-    Output from RadiogenomicsAgent.run(). Expected keys:
-      - idh_mutation_status: str    — "mutant" | "wildtype"
-      - mgmt_methylation_status: str — "methylated" | "unmethylated"
-    """
-
     # ── Surgical Planning Agent output ────────────────────────────────────────
     surgical_analysis: dict[str, Any]
     """
     Output from SurgicalAgent.run(). Expected keys:
       - resectability_score: float  — e.g., 0.85
-      - eloquent_area_proximity: str — "high" | "low"
+      - surgical_recommendation: str
     """
 
     # ── Prognostic Agent output ───────────────────────────────────────────────
@@ -156,7 +162,7 @@ class NeuroAgentState(TypedDict, total=False):
     Aggregated confidence score produced by the Report Agent [0.0, 1.0].
     Combines vision confidence + clinical fit score.
     Used by VerificationAgent as the primary signal.
-    Falls back to vision_findings['confidence'] if not set.
+    Falls back to tumor_classification_findings['confidence'] if not set.
     """
 
     # ── Verification Agent output (see agents/verification_agent/agent.py) ────
@@ -188,7 +194,7 @@ class NeuroAgentState(TypedDict, total=False):
 
 
 def create_initial_state(
-    mri_scan_path: str,
+    mri_slice_path: str,
     patient_data: dict[str, Any],
     run_id: str | None = None,
 ) -> NeuroAgentState:
@@ -199,22 +205,15 @@ def create_initial_state(
     start absent (not None) — LangGraph merges them in as agents run.
 
     Args:
-        mri_scan_path: Path to the NIfTI MRI file.
+        mri_slice_path: Path to the 2D MRI file (JPG/PNG).
         patient_data:  Dict of patient metadata (age, symptoms, history, etc.).
         run_id:        Optional run identifier. Auto-generated UUID4 if omitted.
 
     Returns:
         A NeuroAgentState dict ready to be passed to compile_graph().invoke().
-
-    Example:
-        state = create_initial_state(
-            mri_scan_path="data/raw/patient_001.nii.gz",
-            patient_data={"age": 45, "symptoms": ["headache"]},
-        )
-        result = pipeline.invoke(state)
     """
     state: NeuroAgentState = {
-        "mri_scan_path": mri_scan_path,
+        "mri_slice_path": mri_slice_path,
         "patient_data": patient_data,
         "run_id": run_id or str(uuid.uuid4()),
         "timestamp": datetime.now(timezone.utc).isoformat(),

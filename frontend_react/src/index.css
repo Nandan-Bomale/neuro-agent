@@ -1,0 +1,30 @@
+@import "tailwindcss";
+
+@theme {
+  --color-background: #0a0a0f;
+  --color-panel: rgba(20, 20, 30, 0.65);
+  --color-accent: #00f0ff;
+  --color-primary: #3b82f6;
+  --animate-scan: scan 3s ease-in-out infinite;
+  
+  @keyframes scan {
+    0%, 100% { top: 0%; }
+    50% { top: 100%; }
+  }
+}
+
+@layer base {
+  body {
+    background-color: var(--color-background);
+    color: #e2e8f0;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+.glass-panel {
+  background-color: var(--color-panel);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 4px 30px rgba(0,0,0,0.5);
+}

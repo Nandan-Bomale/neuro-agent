@@ -46,38 +46,51 @@ def _not_yet_implemented(agent_name: str, module_path: str) -> RuntimeError:
 # ── Agent nodes ────────────────────────────────────────────────────────────────
 
 
+def preprocessing_node(state: NeuroAgentState) -> dict[str, Any]:
+    """
+    Node: Preprocessing Agent
+    Reads:  state["mri_slice_path"]
+    Writes: state["preprocessing_findings"], state["mri_slice_path"]
+    """
+    logger.info("[preprocessing_node] Starting PreprocessingAgent | scan=%s", state.get("mri_slice_path"))
+
+    from agents.preprocessing_agent.agent import PreprocessingAgent
+    agent = PreprocessingAgent()
+    result = agent.run(dict(state))
+    return result
+
 def vision_node(state: NeuroAgentState) -> dict[str, Any]:
     """
-    Node: Vision Agent
-    Runs tumour detection + segmentation on the MRI scan.
-
-    Reads:  state["mri_scan_path"]
-    Writes: state["vision_findings"]  (dict with confidence, mask, regions, label)
+    Node: Vision 2D Agent
+    Reads:  state["mri_slice_path"]
+    Writes: state["vision_findings"]
     """
-    logger.info("[vision_node] Starting VisionAgent | scan=%s", state.get("mri_scan_path"))
+    logger.info("[vision_node] Starting Vision2DAgent | scan=%s", state.get("mri_slice_path"))
 
-    try:
-        from agents.vision_agent.agent import VisionAgent  # noqa: PLC0415
-    except (ImportError, AttributeError) as exc:
-        raise _not_yet_implemented(
-            "VisionAgent", "agents/vision_agent/agent.py"
-        ) from exc
+    from agents.vision_2d_agent.agent import Vision2DAgent
+    agent = Vision2DAgent()
+    result = agent.run(dict(state))
+    return result
 
-    agent = VisionAgent()
-    vision_result = agent.run(
-        mri_scan_path=state["mri_scan_path"]
-    )
+def localization_node(state: NeuroAgentState) -> dict[str, Any]:
+    """
+    Node: Localization Agent
+    """
+    logger.info("[localization_node] Starting LocalizationAgent")
+    from agents.localization_agent.agent import LocalizationAgent
+    agent = LocalizationAgent()
+    result = agent.run(dict(state))
+    return result
 
-    logger.info(
-        "[vision_node] Done | confidence=%.4f | label=%s",
-        vision_result.confidence_score,
-        "tumour_detected" if vision_result.tumour_detected else "no_tumour",
-    )
-    return {
-        "vision_findings": vision_result.to_dict(),
-        "mri_slice_path": vision_result.mri_slice_path,
-    }
-
+def emergency_node(state: NeuroAgentState) -> dict[str, Any]:
+    """
+    Node: Emergency Agent
+    """
+    logger.info("[emergency_node] Starting EmergencyAgent")
+    from agents.emergency_agent.agent import EmergencyAgent
+    agent = EmergencyAgent()
+    result = agent.run(dict(state))
+    return result
 
 def tumor_classification_node(state: NeuroAgentState) -> dict[str, Any]:
     """
@@ -125,28 +138,6 @@ def tumor_classification_node(state: NeuroAgentState) -> dict[str, Any]:
         tumor_classification_findings.get("confidence", -1),
     )
     return {"tumor_classification_findings": tumor_classification_findings}
-
-
-def radiogenomics_node(state: NeuroAgentState) -> dict[str, Any]:
-    """
-    Node: Radiogenomics Agent
-    Predicts IDH mutation and MGMT methylation status directly from the MRI.
-
-    Reads:  state["mri_scan_path"], state["tumor_classification_findings"]
-    Writes: state["radiogenomics_findings"]
-    """
-    logger.info("[radiogenomics_node] Starting RadiogenomicsAgent")
-
-    try:
-        from agents.radiogenomics_agent.agent import RadiogenomicsAgent  # noqa: PLC0415
-    except (ImportError, AttributeError) as exc:
-        raise _not_yet_implemented(
-            "RadiogenomicsAgent", "agents/radiogenomics_agent/agent.py"
-        ) from exc
-
-    agent = RadiogenomicsAgent()
-    result = agent.run(dict(state))
-    return result
 
 
 def surgical_node(state: NeuroAgentState) -> dict[str, Any]:
@@ -316,3 +307,5 @@ def human_review_node(state: NeuroAgentState) -> dict[str, Any]:
         "pipeline_status": "human_review_required",
         "human_review_reason": reason,
     }
+
+

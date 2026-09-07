@@ -67,8 +67,6 @@ class PrognosticAgent:
         self,
         tumor_type:  str,
         tumor_grade: Optional[str],
-        idh_status:  str,
-        mgmt_status: str,
         age:         float,
         resectability: float,
     ) -> tuple[float, float, str]:
@@ -87,14 +85,6 @@ class PrognosticAgent:
             grade_entry = GRADE_SURVIVAL.get(tumor_grade, GRADE_SURVIVAL["grade_IV"])
             base_os  = grade_entry["os"]
             base_pfs = grade_entry["pfs"]
-
-        # --- IDH adjustment ---
-        idh_mult = IDH_MUTANT_MULTIPLIER if idh_status == "mutant" else IDH_WILDTYPE_MULTIPLIER
-        base_os  *= idh_mult
-        base_pfs *= idh_mult
-
-        # --- MGMT adjustment (adds months due to chemo response) ---
-        base_os  += MGMT_METHYLATED_OS_BONUS if mgmt_status == "methylated" else MGMT_UNMETHYLATED_OS_BONUS
 
         # --- Age adjustment (>65 carries ~20% worse prognosis) ---
         if age and age > 65:
@@ -125,8 +115,7 @@ class PrognosticAgent:
     def run(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """Run prognostic survival estimation.
         
-        Reads:  tumor_classification_findings, radiogenomics_findings,
-                patient_data, surgical_analysis
+        Reads:  tumor_classification_findings, patient_data, surgical_analysis
         Writes: prognostic_analysis
         """
         t_start = time.perf_counter()
@@ -134,22 +123,17 @@ class PrognosticAgent:
 
         # Extract all inputs
         clf     = state.get("tumor_classification_findings", {})
-        radio   = state.get("radiogenomics_findings", {})
         patient = state.get("patient_data", {})
         surg    = state.get("surgical_analysis", {})
 
         tumor_type   = clf.get("tumor_type",  "glioma")
         tumor_grade  = clf.get("tumor_grade", "grade_IV")
-        idh_status   = radio.get("idh_mutation_status",    "wildtype")
-        mgmt_status  = radio.get("mgmt_methylation_status","unmethylated")
         age          = float(patient.get("age", 55))
         resectability = float(surg.get("resectability_score", 0.75))
 
         os_months, pfs_months, risk = self._estimate_survival(
             tumor_type    = tumor_type,
             tumor_grade   = tumor_grade,
-            idh_status    = idh_status,
-            mgmt_status   = mgmt_status,
             age           = age,
             resectability = resectability,
         )
@@ -167,8 +151,6 @@ class PrognosticAgent:
                 "risk_category":                     risk,
                 "key_factors": {
                     "grade":            tumor_grade,
-                    "idh_status":       idh_status,
-                    "mgmt_status":      mgmt_status,
                     "age":              age,
                     "resectability":    resectability,
                 },

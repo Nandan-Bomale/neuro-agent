@@ -218,3 +218,29 @@ async def analyze(
 
     from fastapi.responses import StreamingResponse
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+from fastapi.responses import StreamingResponse
+
+@router.post("/analyze/stream")
+async def analyze_stream(
+    request: Request,
+    scan_file: UploadFile = File(...),
+    patient_json: str = Form(...)
+):
+    suffix = _validate_file_extension(scan_file.filename)
+    patient_dict = json.loads(patient_json)
+    patient_data = PatientData.model_validate(patient_dict)
+    temp_path = await _save_upload_to_temp(scan_file, suffix)
+    run_id = str(uuid.uuid4())
+    
+    async def event_generator():
+        try:
+            pipeline = request.app.state.pipeline
+            async for event in pipeline.stream_run(str(temp_path), patient_data.to_pipeline_dict(), run_id):
+                yield event
+        finally:
+            if temp_path and temp_path.exists():
+                try: temp_path.unlink()
+                except: pass
+                
+    return StreamingResponse(event_generator(), media_type="text/event-stream")

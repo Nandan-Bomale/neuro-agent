@@ -25,6 +25,10 @@ import time
 import pandas as pd
 from pathlib import Path
 
+# Fix Windows console emoji encoding issues
+if sys.platform.startswith('win'):
+    sys.stdout.reconfigure(encoding='utf-8')
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 os.chdir(ROOT)

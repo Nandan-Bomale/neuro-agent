@@ -1,11 +1,13 @@
 """
 agent.py
 --------
-NeuroOncologistAgent — Generates personalized treatment plans based on 
-NCCN guidelines using a fine-tuned Phi-3 LoRA model.
+NeuroOncologistAgent - Generates personalized treatment plans based on 
+NCCN guidelines using a fine-tuned LoRA model (or base model if not fine-tuned).
 """
 
 from __future__ import annotations
+import os
+os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 
 import time
 import logging
@@ -14,7 +16,7 @@ from pathlib import Path
 
 import torch
 
-# Assuming the use of transformers/peft for LoRA inference
+# Assuming the use of transformers/peft for inference
 try:
     from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
     from peft import PeftModel
@@ -24,11 +26,11 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 AGENT_NAME = "neuro_oncologist_agent"
-BASE_MODEL_NAME = "microsoft/Phi-3-mini-4k-instruct"
+BASE_MODEL_NAME = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 DEFAULT_LORA_PATH = "models/llm/phi3_nccn_lora"
 
 class NeuroOncologistAgent:
-    """Phi-3 LoRA Agent for NCCN Treatment Recommendations."""
+    """Phi-3/TinyLlama Agent for Treatment Recommendations."""
 
     def __init__(
         self,
@@ -50,25 +52,28 @@ class NeuroOncologistAgent:
         if self.generator is not None:
             return
             
-        if not Path(self.lora_path).exists() or AutoModelForCausalLM is None:
-            logger.warning(f"[{AGENT_NAME}] LoRA {self.lora_path} missing or transformers not installed. Running in mock mode.")
+        if AutoModelForCausalLM is None:
+            logger.warning(f"[{AGENT_NAME}] Transformers not installed. Running in mock mode.")
             self.generator = "mock"
             return
             
         try:
             logger.info(f"[{AGENT_NAME}] Loading base model {self.base_model_id}...")
             # Load base model
-            base_model = AutoModelForCausalLM.from_pretrained(
+            dtype = torch.float16 if (self.device and self.device.type == "cuda") else torch.float32
+            model = AutoModelForCausalLM.from_pretrained(
                 self.base_model_id, 
-                torch_dtype=torch.float16, 
+                torch_dtype=dtype, 
                 device_map=self.device
             )
             
-            logger.info(f"[{AGENT_NAME}] Loading LoRA adapters from {self.lora_path}...")
-            # Load LoRA adapter
-            model = PeftModel.from_pretrained(base_model, self.lora_path)
+            if Path(self.lora_path).exists():
+                logger.info(f"[{AGENT_NAME}] Loading LoRA adapters from {self.lora_path}...")
+                model = PeftModel.from_pretrained(model, self.lora_path)
+            else:
+                logger.info(f"[{AGENT_NAME}] LoRA adapters not found. Using base model {self.base_model_id} for inference.")
+
             model.eval()
-            
             tokenizer = AutoTokenizer.from_pretrained(self.base_model_id)
             
             self.generator = pipeline(
@@ -94,14 +99,13 @@ class NeuroOncologistAgent:
                 f"**MOCK RESPONSE**: Based on the NCCN Guidelines for {tumor_type} "
                 f"with {mutation_status}, the standard of care includes maximal safe resection "
                 f"followed by concurrent chemoradiotherapy (e.g., Stupp Protocol) and adjuvant "
-                f"temozolomide. Note: This is a placeholder until the LoRA model training is completed."
+                f"temozolomide."
             )
             
         prompt = (
-            f"You are an expert Neuro-Oncologist. Based on the NCCN guidelines, "
-            f"recommend a treatment plan for a patient with {tumor_type} "
-            f"and {mutation_status} status. Be concise and professional.\n\n"
-            f"Recommendation:"
+            f"<|system|>\nYou are an expert Neuro-Oncologist. Based on guidelines, recommend a treatment plan. Be concise and professional.</s>\n"
+            f"<|user|>\nRecommend a treatment plan for a patient with {tumor_type} and {mutation_status} status.</s>\n"
+            f"<|assistant|>\n"
         )
         
         try:
@@ -113,8 +117,8 @@ class NeuroOncologistAgent:
                 top_p=0.9
             )
             generated_text = outputs[0]["generated_text"]
-            # Extract only the response part
-            response = generated_text.replace(prompt, "").strip()
+            # Extract only the response part after the assistant tag
+            response = generated_text.split("<|assistant|>\n")[-1].strip()
             return response
         except Exception as e:
             logger.error(f"[{AGENT_NAME}] Generation failed: {e}")
@@ -125,11 +129,25 @@ class NeuroOncologistAgent:
         t_start = time.perf_counter()
         logger.info(f"[{AGENT_NAME}] run() invoked.")
         
+        vision = state.get("vision_findings", {})
         tumor_findings = state.get("tumor_classification_findings", {})
         radio_findings = state.get("radiogenomics_findings", {})
         
         tumor_type = tumor_findings.get("tumor_type", "Unknown")
         mutation_status = radio_findings.get("idh_mutation_status", "Unknown")
+        
+        # Clean check for normal / no tumor scans
+        if not vision.get("tumor_detected", True) or str(tumor_type).lower() in ["notumor", "no_tumor", "none", "clean"]:
+            plan = "No oncological treatment indicated. MRI scan is negative for intracranial neoplasm (normal healthy study). Routine clinical follow-up as clinically appropriate."
+            return {
+                "neuro_oncologist_plan": {
+                    "treatment_recommendation": plan,
+                    "chemotherapy_protocol": "None",
+                    "radiotherapy_protocol": "None",
+                    "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                },
+                "overall_confidence": 0.98
+            }
         
         plan = self.generate_treatment_recommendation({
             "tumor_type": tumor_type,

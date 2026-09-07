@@ -105,7 +105,7 @@ class ReportResult:
         Useful for display in the Streamlit frontend.
         """
         review_banner = (
-            "\n⚠️  THIS CASE HAS BEEN FLAGGED FOR MANDATORY RADIOLOGIST REVIEW.\n"
+            "\n[Warning]  THIS CASE HAS BEEN FLAGGED FOR MANDATORY RADIOLOGIST REVIEW.\n"
             if self.requires_human_review else ""
         )
         return (

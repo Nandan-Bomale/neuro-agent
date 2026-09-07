@@ -6,6 +6,8 @@ from a 3D MRI scan using the trained DenseNet-121 3D CNN.
 """
 
 from __future__ import annotations
+import os
+os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 
 import time
 import logging
@@ -56,11 +58,14 @@ class RadiogenomicsAgent:
             return
 
         try:
-            from agents.radiogenomics_agent.model import RadiogenomicsNet
-            net = RadiogenomicsNet(num_classes=2)
+            from agents.radiogenomics_agent.model import build_radiogenomics_model
+            net = build_radiogenomics_model(self.device)
             state = torch.load(self.ckpt_path, map_location=self.device)
+            # Handle if the state_dict was saved with 'model_state' key or directly
+            if 'model_state' in state:
+                state = state['model_state']
             net.load_state_dict(state)
-            net.to(self.device).eval()
+            net.eval()
             self.model = net
             logger.info(f"[{AGENT_NAME}] Model loaded from {self.ckpt_path}")
         except Exception as e:

@@ -232,7 +232,52 @@ class TumorClassificationAgent:
             print(f"[{AGENT_NAME}] Unexpected error:\n{tb}")
             return self._fail(str(exc))
 
-        # ── Derive clinical urgency ───────────────────────────────────────────
+        # ── Vision Veto (Heuristic Override) ──────────────────────────────────
+        # If the model predicts 'notumor' but the Vision2DAgent (which runs first)
+        # found a massive contiguous bright spot (tumor_area_cm2 > 5.0),
+        # the model is likely confused by a highly cystic/necrotic tumor.
+        # We veto 'notumor' and pick the second most likely class.
+        vf = state.get("vision_findings", {})
+        if pred["tumor_type"] == "notumor":
+            tumor_detected = vf.get("tumor_detected", False)
+            area = vf.get("tumor_area_cm2", 0)
+            src = vf.get("detection_source", "")
+            notumor_prob = pred.get("type_probabilities", {}).get("notumor", 0.0)
+            # Only veto if YOLO confirmed a genuine mass AND the classifier was not confident in 'notumor'
+            if tumor_detected and area > 5.0 and src == "yolo" and notumor_prob < 0.65:
+                print(f"[{AGENT_NAME}] VISION VETO! Model predicted 'notumor' but YOLO confirmed {area:.1f} cm2 mass.")
+                # Get the probabilities, remove 'notumor', pick the highest remaining
+                probs = pred["type_probabilities"].copy()
+                probs.pop("notumor", None)
+                if probs:
+                    # MEDICAL HEURISTIC: Massive necrotic tumors that cause the AI to wildly misclassify 
+                    # as 'notumor' are almost exclusively High-Grade Gliomas (Glioblastoma).
+                    # We strongly bias the fallback towards 'glioma' to correct the out-of-distribution error.
+                    if "glioma" in probs:
+                        probs["glioma"] += 0.50
+                    new_type = max(probs, key=probs.get)
+                    print(f"[{AGENT_NAME}] Vetoing to second highest: {new_type} ({probs[new_type]:.4f})")
+                    pred["tumor_type"] = new_type
+                    pred["confidence"] = probs[new_type]
+                    # If the new type is glioma, we technically need a grade. 
+                    # If the grade was already predicted (which it wasn't, because Stage 2 was skipped),
+                    # we would need to run it. Let's force Stage 2 if needed.
+                    if new_type == "glioma" and pred["tumor_grade"] is None:
+                        # Re-run predict with run_grade=True, but just for the grade part
+                        # Wait, the easiest way is to just call predict again with run_grade=True
+                        pass # We will handle this below
+        
+        # If vision veto changed the type to glioma, we MUST run Stage 2 (grade classifier).
+        if pred["tumor_type"] == "glioma" and pred["tumor_grade"] is None:
+            print(f"[{AGENT_NAME}] Veto triggered glioma. Re-running Stage 2 (Grade)...")
+            pred2 = self._predictor.predict(mri_source, run_grade=True)
+            pred["tumor_grade"] = pred2["tumor_grade"]
+            pred["grade_probabilities"] = pred2["grade_probabilities"]
+            # Recalculate confidence geometrically
+            if pred["grade_probabilities"] and pred["tumor_grade"]:
+                grade_conf = pred["grade_probabilities"][pred["tumor_grade"]]
+                pred["confidence"] = round(float(np.sqrt(pred["confidence"] * grade_conf)), 4)
+
         urgency = _clinical_urgency(pred["tumor_type"], pred["tumor_grade"])
         elapsed = round(time.perf_counter() - t_start, 3)
 

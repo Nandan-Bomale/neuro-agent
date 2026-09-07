@@ -660,7 +660,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Phase-1 initial learning rate. Default: 1e-3.",
     )
     p.add_argument(
-        "--num-workers", type=int, default=16,
+        "--num-workers", type=int, default=0,
         help="DataLoader workers. Set 0 on Windows if multiprocessing issues occur. Default: 16.",
     )
     p.add_argument(

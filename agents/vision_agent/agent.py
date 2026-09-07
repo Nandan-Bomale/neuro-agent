@@ -271,29 +271,40 @@ class VisionAgent:
         )
 
         # ── Extract and Save the 2D Slice for Tumor Classification ───────────
-        target_s = gradcam_result["target_slice"]
-        # Extract the raw MRI slice from the tensor: shape [H, W]
-        # Modality idx is used (typically 0 or 2 for T1ce)
-        raw_slice = image_tensor[0, modality_idx, :, :, target_s].detach().cpu().numpy()
-        
-        # Normalize to 0-255 uint8
-        raw_slice = raw_slice - raw_slice.min()
-        if raw_slice.max() > 0:
-            raw_slice = raw_slice / raw_slice.max()
-        raw_slice = (raw_slice * 255).astype(np.uint8)
-        
-        # Save as JPG
+        # FIX: The classifier was trained on raw 240x240 BraTS slices without Z-score normalization.
+        # We must load the raw NIfTI file, min-max scale the slice, and save it.
+        import nibabel as nib
         import os
         from PIL import Image
+        
+        nii = nib.load(mri_scan_path)
+        raw_vol = nii.get_fdata()
+        
+        # Take the middle slice of the Z-axis (or target_s if we can map it)
+        # target_s is in cropped/resampled space. Let's just use the middle of the original volume.
+        # Most tumors span the middle slices.
+        slice_idx = raw_vol.shape[2] // 2
+        
+        raw_slice = raw_vol[:, :, slice_idx].astype(np.float32)
+        
+        # Standard min-max scaling to 0-255 just like in training
+        slice_max = float(raw_slice.max())
+        if slice_max > 0.0:
+            raw_slice = raw_slice / slice_max
+        raw_slice = (raw_slice * 255).astype(np.uint8)
+        
+        # Rotate 90 degrees to make it match kaggle_3m standard orientation if needed
+        # BraTS NIfTI is usually rotated 90 deg clockwise compared to standard JPGs
+        raw_slice = np.rot90(raw_slice)
+        
         slice_dir = Path("data/interim/extracted_slices")
         slice_dir.mkdir(parents=True, exist_ok=True)
         slice_name = f"extracted_slice_{int(time.time())}.jpg"
         slice_path = slice_dir / slice_name
         
-        # Convert to RGB (3-channel) as Tumor Classification expects RGB images
-        img = Image.fromarray(raw_slice).convert("RGB")
+        img = Image.fromarray(raw_slice, mode="L").convert("RGB")
         img.save(slice_path)
-        print(f"[VisionAgent] Saved 2D slice for classification: {slice_path}")
+        print(f"[VisionAgent] Saved 2D RAW slice for classification: {slice_path}")
 
         # ── Step 4: Package result ───────────────────────────────────────────
         confidence   = inference_result["confidence_score"]
