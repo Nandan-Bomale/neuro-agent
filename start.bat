@@ -16,6 +16,7 @@ echo Once they are ready, you can access:
 echo   - Unified Web UI (Recommended): http://localhost:8000/
 echo   - Vite Dev Mode:                 http://localhost:5173/
 echo.
-echo To share online with anyone via 1-click link, run: share_online.bat
-echo.
+echo Opening Web UI in your browser...
+start http://localhost:8000/
+
 pause

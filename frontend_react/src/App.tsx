@@ -3,7 +3,9 @@ import ReactFlow, { Background, Controls, MarkerType, useNodesState, useEdgesSta
 import 'reactflow/dist/style.css';
 import { Play, Upload, Activity, Database, Terminal, Image as ImageIcon, FileText, Download, X } from 'lucide-react';
 
-const backendUrl = "";
+const backendUrl = typeof window !== "undefined" && window.location.port === "5173"
+  ? "http://localhost:8000"
+  : "";
 
 const CustomNode = ({ data, selected }) => (  <div className={`cursor-pointer px-4 py-2 rounded-lg border-2 transition-all duration-300 ${
     data.status === 'running' ? 'bg-primary/20 border-primary shadow-[0_0_15px_rgba(59,130,246,0.5)]' :
@@ -139,6 +141,15 @@ export default function App() {
         body: formData,
       });
 
+      if (!response.ok) {
+        throw new Error(`Server returned HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const contentType = response.headers.get("content-type") || "";
+      if (!contentType.includes("event-stream") && !contentType.includes("json")) {
+        throw new Error(`Unexpected response type (${contentType}). Ensure backend is active on port 8000.`);
+      }
+
       if (!response.body) throw new Error("No response body");
 
       const reader = response.body.getReader();
@@ -194,8 +205,10 @@ export default function App() {
           }
         }
       }
-    } catch (e) {
-      console.error(e);
+    } catch (e: any) {
+      console.error("Pipeline run error:", e);
+      alert(`Pipeline error: ${e?.message || e}`);
+    } finally {
       setIsRunning(false);
     }
   };
