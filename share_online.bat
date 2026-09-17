@@ -7,12 +7,12 @@ echo ===========================================================================
 echo.
 echo [1/3] Checking Backend status...
 
-netstat -ano | findstr :8000 | findstr LISTENING >nul
+netstat -ano | findstr :8005 | findstr LISTENING >nul
 if %ERRORLEVEL% equ 0 (
-    echo [*] Backend is already running on port 8000!
+    echo [*] Backend is already running on port 8005!
 ) else (
-    echo [*] Starting NeuroAgent Backend server on port 8000...
-    start "NeuroAgent Server" /min cmd /k "cd /d "%~dp0" && python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000"
+    echo [*] Starting NeuroAgent Backend server on port 8005...
+    start "NeuroAgent Server" /min cmd /k "cd /d "%~dp0" && python -m uvicorn backend.main:app --host 0.0.0.0 --port 8005"
     timeout /t 5 /nobreak >nul
 )
 
@@ -32,6 +32,6 @@ echo  LOOK FOR THE LINK BELOW ENDING IN .trycloudflare.com
 echo  Anyone in the world can click that link to access your live system!
 echo ===============================================================================
 echo.
-"%~dp0tools\cloudflared.exe" tunnel --url http://localhost:8000
+"%~dp0tools\cloudflared.exe" tunnel --url http://127.0.0.1:8005
 
 pause
