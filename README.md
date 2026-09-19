@@ -1,199 +1,113 @@
 ---
 title: NeuroAgent
-emoji: 🧠
+emoji: dY 
 colorFrom: indigo
 colorTo: purple
 sdk: docker
-app_port: 7860
+app_port: 8000
 pinned: false
 ---
 
-# 🧠 NeuroAgent
-### A Multi-Agent AI System for Brain MRI Diagnosis Support
+# dY  NeuroAgent
+### An Autonomous Multi-Agent AI System for Brain Tumor Diagnosis and Care Planning
 
-> **Status**: 🚧 In Development  
+> **Status**: dYs  Production Prototype  
 > **Team**: Nandan | Guided by Prof. Prashant N  
-> **Timeline**: July – October 2026
 
 ---
 
-## 📌 Overview
+## dY"O Overview
 
-NeuroAgent is a multi-agent AI pipeline for brain MRI analysis. Instead of a single classifier, it builds a team of specialized AI agents that collaborate — the way a real clinical team would — to detect abnormalities, reason over patient history, retrieve medical literature, generate structured reports, and verify confidence before results reach a doctor.
+**NeuroAgent** is a distributed, multi-agent AI pipeline for analyzing Brain MRIs. Instead of a single monolithic model (a "black box"), this system digitally recreates a hospital's **Tumor Board**. It uses a sequence of specialized AI agents working together to detect abnormalities, classify tumor types, localize the mass, triage emergencies, and synthesize a comprehensive medical report. 
 
----
-
-## 🏗️ System Architecture
-
-```
-Input (MRI Scan + Patient Data)
-        │
-        ▼
-  ┌─────────────┐
-  │ Orchestrator │  ← LangGraph
-  └──────┬──────┘
-         │
-   ┌─────┼──────────────────────────────┐
-   ▼     ▼                              ▼
-Vision  Clinical History            RAG Literature
-Agent   Agent                       Agent
-   │     │                              │
-   └─────┴──────────────────────────────┘
-                     │
-                     ▼
-            Report Generation Agent
-                     │
-                     ▼
-            Verification Agent
-                     │
-              ┌──────┴──────┐
-              ▼             ▼
-        ✅ Output     ⚠️ Human Review Flag
-              │
-              ▼
-        Explainability Agent (Grad-CAM)
-```
+This multi-agent approach guarantees high accuracy and complete explainability, fostering clinical trust.
 
 ---
 
-## 🤖 Agents
+## dY?-,? System Architecture & The 9 Agents
 
-| Agent | Responsibility | Key Tech |
-|---|---|---|
-| **Vision Agent** | Tumour detection & segmentation | PyTorch, MONAI, U-Net |
-| **Clinical History Agent** | Reasoning over patient metadata | LLM + structured prompts |
-| **RAG Literature Agent** | Evidence retrieval from PubMed | FAISS/Chroma, PubMedBERT |
-| **Report Generation Agent** | Structured radiology report writing | Llama-3.2-3B / Phi-3-mini + LoRA |
-| **Verification Agent** | Confidence checking & human review flags | Rule-based + LLM |
-| **Explainability Agent** | Grad-CAM heatmap generation | PyTorch hooks |
-| **Orchestrator** | Agent coordination & routing | LangGraph |
+The system uses a sequential orchestration pipeline where the output of one agent becomes the input of the next.
 
----
-
-## 🛠️ Tech Stack
-
-| Layer | Tool |
-|---|---|
-| Vision Model | PyTorch, MONAI, U-Net |
-| Augmentation | Classical (rotation, flip, elastic) + GAN (enhancement) |
-| Language Model | Llama-3.2-3B or Phi-3-mini + LoRA (4-bit) |
-| RAG / Retrieval | FAISS / Chroma + PubMedBERT embeddings |
-| Orchestration | LangGraph |
-| Backend | FastAPI |
-| Frontend | Streamlit |
-| Deployment | Docker |
+| # | Agent | Role | Output / Responsibility |
+|---|---|---|---|
+| **1** | **Vision Agent** | Pre-processor | Skull-stripping, MRI sequence ID (T1, T2, FLAIR) |
+| **2** | **Tumor Classification** | Pathologist | Predicts Tumor Type (Glioma, Meningioma, Pituitary) & WHO Grade |
+| **3** | **Localization Agent** | Radiologist | Draws bounding boxes and active contour masks around the tumor |
+| **4** | **Emergency Agent** | ER Doctor | Flags immediate emergencies (e.g., Midline Shift, Hydrocephalus) |
+| **5** | **Surgical Planning** | Neurosurgeon | Evaluates resectability based on tumor coordinates |
+| **6** | **Prognostic Agent** | Researcher | Estimates survival timelines & predicts radiogenomic mutations |
+| **7** | **Clinical Trials** | Matchmaker | Matches the patient's profile with active experimental medical trials |
+| **8** | **Neuro-Oncologist** | Chief Physician | Synthesizes all data into a holistic treatment strategy |
+| **9** | **Explainability** | Reporter | Generates structured text logs and Grad-CAM/Bounding Box overlays |
 
 ---
 
-## 📁 Project Structure
+## dY>,? Tech Stack
 
-```
-neuro-agent/
-├── agents/
-│   ├── vision_agent/
-│   ├── clinical_history_agent/
-│   ├── rag_literature_agent/
-│   ├── report_generation_agent/
-│   ├── verification_agent/
-│   └── explainability_agent/
-├── orchestrator/
-├── data/
-│   ├── raw/
-│   ├── processed/
-│   └── vector_store/
-├── models/
-│   ├── vision/
-│   └── llm/
-├── frontend/
-├── backend/
-├── notebooks/
-├── tests/
-├── docker/
-├── docs/
-├── requirements.txt
-├── requirements-dev.txt
-├── .env.example
-├── .gitignore
-└── README.md
-```
+* **AI Models:** PyTorch, Deep CNN Ensembles (ResNet/DenseNet), YOLOv8 (Localization)
+* **Orchestration:** LangGraph state-management
+* **Backend:** Python, FastAPI, Uvicorn
+* **Frontend:** Node.js, React (Vite), ReactFlow, TailwindCSS
+* **Computer Vision:** OpenCV, MONAI
 
 ---
 
-## 📅 Timeline
+## dYs? Getting Started
 
-| Weeks | Phase | Deliverable |
-|---|---|---|
-| 1–3 | Vision Agent | Tumour segmentation model + Grad-CAM, tested on BraTS |
-| 4–5 | Augmentation | Classical pipeline (baseline); GAN attempted in parallel |
-| 6–7 | RAG Pipeline | Vector DB from PubMed; literature agent with citations |
-| 8–9 | Report Agent | LoRA fine-tuned LLM producing structured reports |
-| 10–11 | Orchestration | All agents connected via LangGraph with verification loop |
-| 12 | Polish & Demo | End-to-end testing, Streamlit UI, final report, demo |
+Follow these instructions to run the full NeuroAgent system locally on your machine.
 
----
+### 1. Prerequisites
+- **Python 3.10+** 
+- **Node.js** (Required for the React frontend)
+- **Git**
 
-## 📊 Datasets
-
-| Dataset | Purpose |
-|---|---|
-| BraTS (Brain Tumour Segmentation) | Vision agent training & evaluation |
-| PubMed abstracts (NCBI E-utilities) | RAG literature corpus |
-| Synthetic clinical profiles | Patient metadata paired with BraTS scans |
-
----
-
-## 🚀 Getting Started
-
-### Prerequisites
-- Python 3.10+
-- CUDA-capable GPU (recommended) or Google Colab
-- Docker (optional, for full deployment)
-
-### Installation
+### 2. Installation
+Clone the repository and install the required dependencies:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/neuro-agent.git
+# Clone the repository
+git clone https://github.com/Nandan-Bomale/neuro-agent.git
 cd neuro-agent
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install backend dependencies
 pip install -r requirements.txt
+
+# Install frontend dependencies
+cd frontend_react
+npm install
+cd ..
 ```
 
-### Running the Demo
+### 3. Download AI Models
+Since the AI weights are too large for GitHub (>100MB), they are hosted on Hugging Face. Run the provided script to automatically download and place them in the correct folders:
 
 ```bash
-# Start the backend
-cd backend
-uvicorn main:app --reload
-
-# Start the frontend (in a new terminal)
-cd frontend
-streamlit run app.py
+python download_models.py
 ```
 
----
+### 4. Running the Application
+We have included a 1-click start script that launches both the FastAPI backend and the React frontend simultaneously:
 
-## 🎯 Expected Outcomes
-
-- ✅ End-to-end system: upload MRI scan → receive structured, evidence-cited report with confidence flag
-- ✅ Trained vision model with Dice score reported on BraTS held-out test set
-- ✅ Fine-tuned report generation model with sample outputs
-- ✅ Working RAG pipeline with real, cited PubMed literature
-- ✅ Demo video + live walkthrough for evaluation/defence
-- ✅ Written project report
+```bash
+# On Windows
+start.bat
+```
+*A browser window will automatically open to `http://localhost:8000` with the unified UI.*
 
 ---
 
-## 👥 Team
+## dY O Sharing Online (Cloudflare Tunnel)
 
-| Name | Role |
-|---|---|
-| Nandan | Lead Developer |
-| [Colleague Name] | Co-Developer |
-| Prof. Prashant N | Project Guide |
+If you want to access the software on another device (e.g., your phone) or share it with someone over the internet, we have included a 1-click deployment script.
+
+```bash
+# On Windows
+share_online.bat
+```
+This script will safely host the application on port `8005` and automatically generate a **100% free, public HTTPS `.trycloudflare.com` link**. Anyone with the link can use your locally running AI pipeline from anywhere in the world.
 
 ---
 
-## 📄 License
+## dY", License & Disclaimer
 
-This project is for academic purposes. All datasets used are publicly available.
+This project is an **academic research prototype** and is **not FDA-approved**. It is designed as an assistive "second opinion" tool to demonstrate multi-agent architectures in healthcare, and must not be used as a replacement for human clinical diagnosis. All datasets used (e.g., BraTS, Figshare) are publicly available for academic research.
