@@ -1,1 +1,0 @@
-"""NeuroAgent frontend UI components."""
