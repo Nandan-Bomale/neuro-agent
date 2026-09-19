@@ -1,0 +1,92 @@
+================================================================================
+PROJECT PROPOSAL
+================================================================================
+
+PROJECT TITLE: 
+Neuro Agent: An Autonomous Multi-Agent AI System for Brain Tumor Diagnosis and Care Planning
+
+1. INTRODUCTION
+Brain tumor diagnosis and treatment planning currently require a multi-disciplinary "Tumor Board" consisting of radiologists, neurosurgeons, and oncologists. This collaborative process is crucial but time-consuming, expensive, and subject to inter-observer variability. With the advent of deep learning and Large Language Models (LLMs), there is an opportunity to digitize and automate this collaborative diagnostic process. 
+
+2. PROBLEM STATEMENT
+The manual analysis of Magnetic Resonance Imaging (MRI) scans for brain tumors is complex and time-intensive. Healthcare systems face a shortage of specialized neuro-oncologists, leading to delayed diagnoses and triaging bottlenecks. Furthermore, existing AI diagnostic tools operate as "black boxes" that provide a single output without explaining their reasoning, leading to a lack of clinical trust. There is a need for a transparent, step-by-step AI system that mimics the collaborative workflow of a human medical board.
+
+3. OBJECTIVES (WHAT WE ARE BUILDING)
+We propose "Neuro Agent," a distributed, multi-agent AI pipeline. Instead of a single monolithic model, the system utilizes distinct AI agents—each acting as a medical specialist. The objectives are:
+- To develop computer vision models capable of classifying brain tumors (Glioma, Meningioma, Pituitary) and grading their severity (WHO Grade I-IV).
+- To build a localization engine that generates bounding boxes and active contours around tumor masses.
+- To orchestrate multiple AI agents using a state-graph architecture so they can pass radiological findings to one another.
+- To develop an interactive ReactFlow-based UI that visually explains the AI's reasoning in real-time.
+
+4. SYSTEM ARCHITECTURE & AGENTS
+The system employs a sequential LangGraph-style orchestration pipeline where the output of one agent becomes the input of the next.
+
+Agents Involved:
+1. Vision Agent (Pre-processor): Cleans the image, performs skull-stripping, and identifies the MRI sequence (T1, T1CE, T2, FLAIR).
+2. Tumor Classification Agent (Pathologist): Classifies the tumor type and calculates the WHO severity grade.
+3. Localization Agent (Radiologist): Draws bounding boxes and active contour masks around the tumor.
+4. Emergency Triage Agent (ER Doctor): Calculates midline shift and hydrocephalus risk to flag immediate surgical emergencies.
+5. Surgical Planning Agent (Neurosurgeon): Evaluates resectability based on tumor coordinates and proximity to critical brain regions.
+6. Prognostic Agent (Researcher): Estimates survival timelines and predicts radiogenomic mutations.
+7. Clinical Trials Agent (Matchmaker): Matches the patient's profile with experimental medical trials.
+8. Neuro-Oncologist Agent (Chief Physician): Synthesizes all data into a cohesive, holistic treatment plan.
+9. Explainability Agent (Reporter): Generates human-readable text logs and visual overlays (Grad-CAM/bounding boxes) to establish clinical trust.
+
+5. AI MODELS & DATASETS
+- Classification Models: PyTorch-based Deep Convolutional Neural Networks (ResNet/DenseNet ensembles) to reduce variance and improve accuracy.
+- Localization Models: YOLOv8 (You Only Look Once) or custom bounding-box regressors for high-speed object detection.
+- Orchestration: LLM-assisted text synthesis and LangGraph state-management.
+- Datasets Used: BraTS (Brain Tumor Segmentation Challenge) for localization masks, and combined Figshare/Kaggle datasets for classification.
+
+6. CONSTRAINTS & LIMITATIONS
+- Dimensionality: The current prototype processes 2D MRI slices. Full volumetric 3D (NIfTI) processing requires significantly more computational overhead and is reserved for future scope.
+- Hardware Requirements: Training the deep learning models requires heavy GPU acceleration. Inference requires moderate RAM (~1-2 GB) which limits deployment on highly constrained edge devices.
+- Scan Quality: The pipeline is highly dependent on the quality of the uploaded scan. Blurry, off-center, or non-MRI images may yield unpredictable results.
+- Clinical Validation: This is an academic research prototype and is not FDA-approved. It is designed as an assistive "second opinion" tool, not a replacement for human doctors.
+
+7. SOFTWARE & HARDWARE REQUIREMENTS
+- Backend: Python 3.10+, FastAPI, Uvicorn, PyTorch, OpenCV.
+- Frontend: Node.js, React (Vite), ReactFlow, TailwindCSS.
+- Hardware: Minimum 8GB RAM, Multi-core CPU. (GPU recommended for rapid inference).
+
+8. FLOWCHART (PIPELINE EXECUTION)
+[Raw MRI Image + Patient Data]
+       |
+       v
+(1) Vision Agent (Skull stripping, Sequence ID)
+       |
+       v
+(2) Tumor Classification Agent (Type & Grade)
+       |
+       v
+(3) Localization Agent (Bounding Box & Mask)
+       |
+       +--> (4) Emergency Agent (Triage Status)
+       |
+       +--> (5) Surgical Planning Agent (Resectability)
+       |
+       +--> (6) Prognostic Agent (Survival Rate)
+       |
+       +--> (7) Clinical Trials Agent (Matching)
+       |
+       v
+(8) Neuro-Oncologist Agent (Synthesized Treatment Plan)
+       |
+       v
+(9) Explainability Agent (Final Report + Visual Overlays)
+       |
+       v
+[Structured Medical Report & Highlighted UI]
+
+9. PROJECT TIMELINE (GANTT CHART SCHEDULE)
+- Phase 1 (Weeks 1-2): Literature Review, Problem Formulation, & Dataset Acquisition.
+- Phase 2 (Weeks 3-5): Data Preprocessing & Training PyTorch Computer Vision Models (Classification & YOLO).
+- Phase 3 (Weeks 6-7): Developing the Backend Pipeline (FastAPI) and Agent logic.
+- Phase 4 (Weeks 8-9): Frontend Development (ReactFlow UI, real-time node animations).
+- Phase 5 (Weeks 10-11): System Integration, Edge-case handling, & Local Testing.
+- Phase 6 (Week 12): Final Documentation, Report Generation, and Cloudflare/Cloud Deployment.
+
+10. EXPECTED OUTCOMES
+A fully functional, deployable web application that accepts an MRI scan and returns a highly detailed, explainable medical report within seconds. The project will demonstrate how Multi-Agent AI architectures can solve complex, multi-disciplinary medical tasks transparently.
+
+================================================================================
