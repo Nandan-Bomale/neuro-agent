@@ -12,7 +12,7 @@ pinned: false
 ### An Autonomous Multi-Agent AI System for Brain Tumor Diagnosis and Care Planning
 
 > **Status**: dYs  Production Prototype  
-> **Team**: Nandan | Guided by Prof. Prashant N  
+> **Team**: Nandan  
 
 ---
 
