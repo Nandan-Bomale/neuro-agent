@@ -57,22 +57,24 @@ class PreprocessingAgent:
         total_pixels = H_full * W_full
 
         # ── GATE 1: Color saturation check ─────────────────────────────────────
-        # Real MRI scans are produced by a magnetic scanner — they are always
-        # near-grayscale with virtually zero color saturation. Natural photographs
-        # of buildings, people, etc. have rich color variety (mean saturation > 25).
+        # Real MRI scans come from a magnetic scanner — they are always pure
+        # grayscale. Even when saved as JPEG color (3 channels), all three
+        # channels are identical copies of the grayscale. Natural photos,
+        # even when they look faded, still contain residual color tint.
+        # Threshold: MRIs < 10, natural photos typically 15–80+.
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         mean_saturation = float(hsv[:, :, 1].mean())
-        if mean_saturation > 25.0:
+        if mean_saturation > 15.0:
             logger.warning(
-                "[%s] REJECTED: mean_saturation=%.1f > 25 — color photo, not a MRI.",
+                "[%s] REJECTED: mean_saturation=%.1f > 15 — color photo, not a MRI.",
                 AGENT_NAME, mean_saturation
             )
             return {
                 "mri_slice_path": original_path,
                 "preprocessing_findings": {
                     "error": (
-                        "Invalid Input: This appears to be a natural color photograph, not a brain MRI scan. "
-                        "Please upload a valid grayscale brain MRI image (.jpg or .png)."
+                        "Invalid Input: This appears to be a natural photograph, not a brain MRI scan. "
+                        "Please upload a valid grayscale brain MRI image."
                     ),
                     "is_brain": False,
                     "brain_coverage_ratio": 0.0,
@@ -82,25 +84,51 @@ class PreprocessingAgent:
                 }
             }
 
-        # ── GATE 2: Edge density check ──────────────────────────────────────────
-        # Brain MRIs have smooth tissue gradients and a limited number of strong
-        # edges (skull boundary, ventricle walls, tumor border). Natural photographs
-        # of complex scenes are saturated with high-frequency edges (windows, text,
-        # foliage, architectural details). A Canny edge map with >12% pixel coverage
-        # is a reliable signal that this is NOT a medical scan.
-        gray_raw = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        edges = cv2.Canny(gray_raw, threshold1=50, threshold2=150)
-        edge_density = float(np.count_nonzero(edges)) / total_pixels
-        if edge_density > 0.12:
+        # ── GATE 2: Hue variety check ──────────────────────────────────────────
+        # A true grayscale MRI has virtually zero hue variation — all pixels
+        # cluster around hue=0 because they're gray. A natural photo (even a
+        # desaturated one) has sky, vegetation, concrete, skin — producing many
+        # different hue values. Count unique hue values in the image.
+        # MRIs: typically < 5 unique hues. Natural photos: > 20.
+        hue_channel = hsv[:, :, 0]
+        unique_hues = len(np.unique(hue_channel[hsv[:, :, 1] > 10]))  # only count pixels that have some color
+        if unique_hues > 20:
             logger.warning(
-                "[%s] REJECTED: edge_density=%.3f > 0.12 — complex natural image, not a MRI.",
+                "[%s] REJECTED: unique_hues=%d > 20 — color-varied image, not a MRI.",
+                AGENT_NAME, unique_hues
+            )
+            return {
+                "mri_slice_path": original_path,
+                "preprocessing_findings": {
+                    "error": (
+                        "Invalid Input: This image contains too many distinct colors to be a grayscale medical scan. "
+                        "Please upload a valid brain MRI scan."
+                    ),
+                    "is_brain": False,
+                    "brain_coverage_ratio": 0.0,
+                    "mri_sequence": "unknown",
+                    "skull_stripped": False,
+                    "inference_time_sec": round(time.perf_counter() - t_start, 4)
+                }
+            }
+
+        # ── GATE 3: Edge density check ──────────────────────────────────────────
+        # Brain MRIs have smooth tissue gradients with very few strong edges.
+        # Natural photographs are full of high-frequency structural edges.
+        # Canny edge coverage > 8% is a strong signal this is NOT a medical scan.
+        gray_raw = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray_raw, threshold1=40, threshold2=120)
+        edge_density = float(np.count_nonzero(edges)) / total_pixels
+        if edge_density > 0.08:
+            logger.warning(
+                "[%s] REJECTED: edge_density=%.3f > 0.08 — complex natural image, not a MRI.",
                 AGENT_NAME, edge_density
             )
             return {
                 "mri_slice_path": original_path,
                 "preprocessing_findings": {
                     "error": (
-                        "Invalid Input: This image has too many high-frequency edges to be a medical scan. "
+                        "Invalid Input: This image has too many sharp edges to be a medical scan. "
                         "Please upload a valid brain MRI scan."
                     ),
                     "is_brain": False,
