@@ -797,9 +797,15 @@ class OrchestratorPipeline:
             img_b64 = None
             heatmap_path = state_update.get("gradcam_heatmap_path")
             if heatmap_path and heatmap_path != "gradcam_not_available" and Path(heatmap_path).exists():
-                img_b64 = base64.b64encode(Path(heatmap_path).read_bytes()).decode("utf-8")
+                raw_b64 = base64.b64encode(Path(heatmap_path).read_bytes()).decode("utf-8")
+                img_b64 = f"data:image/jpeg;base64,{raw_b64}"
                 
-            out_data = {"explanation_summary": state_update.get("explanation_summary", "")}
+            out_data = {
+                "explanation_summary": state_update.get("explanation_summary", ""),
+                "gradcam_heatmap_path": heatmap_path,
+                # Provide tumor_detected to frontend so it shows the appropriate header banner
+                "tumor_detected": not ("NORMAL BRAIN" in state_update.get("explanation_summary", "") or "No evidence" in state_update.get("explanation_summary", ""))
+            }
             return AgentExecutionEvent(
                 agent_name=node_name,
                 input_summary="Input: Full State Graph",
