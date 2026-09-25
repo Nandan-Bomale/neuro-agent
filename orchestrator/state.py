@@ -86,6 +86,8 @@ class NeuroAgentState(TypedDict, total=False):
     error_message: Optional[str]
     """Human-readable error description if pipeline_status == 'error'."""
 
+    preprocessing_findings: dict[str, Any]
+
     # ── Emergency Agent output ────────────────────────────────────────────────
     emergency_findings: dict[str, Any]
     """
