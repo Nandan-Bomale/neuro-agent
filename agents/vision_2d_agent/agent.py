@@ -427,7 +427,7 @@ class Vision2DAgent:
         if box is not None and tumor_detected:
             x, y, w, h = box
             cv2.rectangle(out, (x, y), (x+w, y+h), (0, 0, 255), 2)
-            cv2.putText(out, f"AI:TumorMass [{source}]",
+            cv2.putText(out, "AI:TumorMass",
                         (x, max(y-6, 16)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
             if tumor_area_cm2 > 0:
                 cv2.putText(out, f"{tumor_area_cm2:.1f} cm2",
