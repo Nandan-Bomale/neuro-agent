@@ -172,6 +172,14 @@ export default function App() {
               const data = JSON.parse(rawData);
               console.log("Event:", data);
               const { agent_name, status } = data;
+
+              // ── Pipeline rejected the image (e.g. non-MRI upload) ──────────
+              if (status === 'error' && data.is_final) {
+                const errMsg = data.output_data?.error || "An unexpected pipeline error occurred.";
+                setIsRunning(false);
+                alert(`❌ Analysis Rejected:\n\n${errMsg}`);
+                break;
+              }
               
               setAgentData(prev => ({
                 ...prev,

@@ -651,6 +651,30 @@ class OrchestratorPipeline:
             # astream yields chunks like {"node_name": updated_state}
             async for chunk in self._graph.astream(initial_state):
                 for node_name, state_update in chunk.items():
+
+                    # ── EARLY EXIT: Non-brain image rejected by preprocessing ──
+                    if node_name == "preprocessing":
+                        pf = state_update.get("preprocessing_findings", {})
+                        if not pf.get("is_brain", True):
+                            error_msg = pf.get("error", "Not a brain MRI — image rejected.")
+                            logger.warning("[Pipeline] Non-MRI rejected: %s", error_msg)
+                            reject_event = AgentExecutionEvent(
+                                agent_name="preprocessing",
+                                status="error",
+                                input_summary="Input: Uploaded Image",
+                                input_data={"task": "Validate and preprocess MRI"},
+                                output_data={"error": error_msg, "is_brain": False},
+                                processing_logs=[
+                                    "Checking color saturation...",
+                                    "Checking edge density...",
+                                    f"REJECTED: {error_msg}"
+                                ],
+                                image_b64=None,
+                                is_final=True
+                            )
+                            yield f"data: {reject_event.model_dump_json()}\n\n"
+                            return
+
                     event = self._format_sse_event(node_name, state_update)
                     if event:
                         # In real mode, we just emit the completion event. The UI can infer 'running' state.
