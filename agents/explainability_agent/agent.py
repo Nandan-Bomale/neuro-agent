@@ -113,7 +113,7 @@ class ExplainabilityAgent:
         resectability = surg.get("resectability_score")
         surg_rec     = surg.get("surgical_recommendation")
 
-        heatmap_path = state.get("gradcam_heatmap_path") or vision.get("segmentation_mask_path") or "gradcam_not_available"
+        heatmap_path = state.get("gradcam_heatmap_path") or "gradcam_not_available"
 
         # --- Build plain-language summary ---
         summary = self._build_explanation_text(
