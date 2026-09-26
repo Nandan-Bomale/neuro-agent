@@ -112,32 +112,6 @@ class PreprocessingAgent:
                 }
             }
 
-        # ── GATE 3: Edge density check ──────────────────────────────────────────
-        # Brain MRIs have smooth tissue gradients with very few strong edges.
-        # Natural photographs are full of high-frequency structural edges.
-        # Canny edge coverage > 8% is a strong signal this is NOT a medical scan.
-        gray_raw = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        edges = cv2.Canny(gray_raw, threshold1=40, threshold2=120)
-        edge_density = float(np.count_nonzero(edges)) / total_pixels
-        if edge_density > 0.08:
-            logger.warning(
-                "[%s] REJECTED: edge_density=%.3f > 0.08 — complex natural image, not a MRI.",
-                AGENT_NAME, edge_density
-            )
-            return {
-                "mri_slice_path": original_path,
-                "preprocessing_findings": {
-                    "error": (
-                        "Invalid Input: This image has too many sharp edges to be a medical scan. "
-                        "Please upload a valid brain MRI scan."
-                    ),
-                    "is_brain": False,
-                    "brain_coverage_ratio": 0.0,
-                    "mri_sequence": "unknown",
-                    "skull_stripped": False,
-                    "inference_time_sec": round(time.perf_counter() - t_start, 4)
-                }
-            }
 
         # 1. Clean borders/watermarks
         img = _strip_borders(img)
